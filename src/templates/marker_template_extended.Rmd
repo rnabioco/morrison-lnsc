@@ -1,0 +1,87 @@
+
+```{r}
+
+# Input params
+so_in       <- {{so_in}}
+clmn        <- "{{clmn}}"
+box_cols    <- {{box_cols}}
+sample_cols <- {{sample_cols}}
+
+```
+
+### `r treats[1]` {.tabset .tabset-pills}
+
+Marker genes were identified for cell types from `r treats[1]`-infected samples. To identify marker genes, cells from the indicated cell type were compared with all other `r treats[1]`-infected cells. The top up- or down-regulated genes are shown below. This analysis was only performed for cell types that were identified in all replicates.
+
+```{r "{{so_in}} {{clmn}} mock", fig.width = 13, fig.height = 16, results = "asis"}
+
+so_in %>%
+  create_treatment_marker_fig(
+    treat       = treats[1],
+    grp_clmn    = clmn,
+    fc_range    = c(log2(1.5), Inf),
+    file_dir    = table_dir,
+    file_prefix = treats[2],
+    box_cols    = box_cols,
+    filt_regex  = "^Rp[sl]|^mt-",
+    box_aspect_ratio = 0.8
+  )
+
+```
+
+### `r treats[2]` {.tabset .tabset-pills}
+
+Marker genes were identified for cell types from `r treats[2]`-infected samples. To identify marker genes, cells from the indicated cell type were compared with all other `r treats[2]`-infected cells. The top upregulated genes are shown below. GO terms for marker genes are shown at the bottom. This analysis was only performed for cell types that were identified in all replicates.
+
+```{r "{{so_in}} {{clmn}} CHIKV", fig.width = 13, fig.height = 16, results = "asis"}
+
+so_in %>%
+  create_treatment_marker_fig(
+    treat       = "CHIKV",
+    grp_clmn    = clmn,
+    fc_range    = c(log2(1.5), Inf),
+    file_dir    = table_dir,
+    file_prefix = "CHIKV",
+    box_cols    = box_cols,
+    filt_regex  = "^Rp[sl]|^mt-",
+    box_aspect_ratio = 0.8
+  )
+
+```
+
+### `r treats[1]` vs `r treats[2]`
+
+Differentially expressed genes were identified for each cell type by comparing replicates from the `r treats[1]`- and `r treats[2]`-infected groups. The top up- or down-regulated genes in the `r chikv_infctd` group are shown below. This analysis was only performed for cell types that were identified in all samples.
+
+#### upregulated {.tabset .tabset-pills}
+
+```{r "{{so_in}} {{clmn}} CHIKV vs mock up", fig.width = 11, fig.height = 15, results = "asis"}
+
+so_in %>%
+  create_treatment_vs_marker_fig(
+    treat      = chikv_infctd,
+    grp_clmn   = clmn,
+    fc_range   = c(log2(1.25), Inf),
+    file_dir   = table_dir,
+    box_cols   = sample_cols,
+    filt_regex = "^Rp[sl]|^mt-"
+  )
+
+```
+
+#### downregulated {.tabset .tabset-pills}
+
+```{r "{{so_in}} {{clmn}} CHIKV vs mock down", fig.width = 11, fig.height = 15, results = "asis"}
+
+so_in %>%
+  create_treatment_vs_marker_fig(
+    treat      = unique(treats[treats != chikv_infctd]),
+    grp_clmn   = clmn,
+    fc_range   = c(log2(1.25), Inf),
+    file_dir   = table_dir,
+    box_cols   = sample_cols,
+    filt_regex = "^Rp[sl]|^mt-",
+    footer     = "\n\n---\n\n<br>\n\n<br>\n\n"
+  )
+
+```

@@ -1,0 +1,1730 @@
+---
+title:  "CHIKV scRNA-seq"
+author: "Ryan Sheridan"
+date:   "`r Sys.Date()`"
+output: 
+  html_document:
+    toc:       true
+    toc_float: true
+    toc_depth: 3
+    theme:     cosmo
+    highlight: kate
+    
+params:
+  unenr_dir:    "results/2021-04-16"      # Directory containing unenriched data
+  enr_dir:      "results/2021-07-16"      # Directory containing CHIKV-enriched data
+  
+  template_dir: "src"                     # Directory containing Rmd templates
+  table_dir:    "tables"                  # Directory to write tables
+  overwrite:    false                     # Should tables be overwritten if they already exist?
+  
+  so_dir:       "sobjs"                   # Directory to write Seurat objects
+  metrics:      "count_metrics.csv"       # Cell Ranger metrics
+  so:           "so.rds"                  # Seurat object for filtered cells
+  so_raw:       "so_raw.rds"              # Seurat object for unfiltered cells
+  so_lec:       "so_lec.rds"              # Seurat object for LECs
+  so_fib:       "so_fib.rds"              # Seurat object for fibroblasts
+  so_infd:      "so_infd.rds"             # Seurat object for fibroblasts
+  so_chikv:     "so_chikv.rds"            # Seurat object for CHIKV-high cells
+  gene_min:     250                       # Min number of detected genes per cell
+  gene_max:     8000                      # Max number of detected genes per cell
+  mito_max:     20                        # Max percentage mito reads per cells
+  type_res:     5                         # Clustering resolution for annotating cell types
+  lec_res:      5                         # Clustering resolution for annotating LECs
+  fib_res:      5                         # Clustering resolution for annotating fibroblasts/stromal cells
+  chikv_lim:    5                         # CHIKV read cutoff to include cell for CHIKV clustering
+  tm:           "8hpi"                    # Hours post infection
+
+  samples:
+    - "M1"
+    - "M2"
+    - "AF1"
+    - "AF2"
+---
+
+<br>
+
+```{r "chunk opts", echo = F}
+
+# Default chunk options
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE,
+  echo    = FALSE
+)
+
+```
+
+`r knitr::knit_child(here::here(params$enr_dir, "setup.Rmd"))`
+
+```{r "theme"}
+
+# ggplot2 themes
+txt_pt1  <- 10
+txt_pt2  <- 12
+ttl_pt1  <- 14
+ttl_pt2  <- 16
+ln_pt    <- 0.5
+ln_col   <- "grey85"
+cir_size <- 3.5
+sqr_size <- 4
+
+txt_theme_1 <- theme(
+  strip.text  = element_text(size = ttl_pt1),
+  legend.text = element_text(size = txt_pt1),
+  axis.title  = element_text(size = txt_pt2),
+  axis.text   = element_text(size = txt_pt1)
+)
+
+line_theme <- theme(
+  axis.line.x  = element_line(size = ln_pt, color = ln_col),
+  axis.line.y  = element_line(size = ln_pt, color = ln_col),
+  axis.ticks.x = element_line(size = ln_pt, color = ln_col),
+  axis.ticks.y = element_line(size = ln_pt, color = ln_col)
+)
+
+base_theme <- theme_cowplot() +
+  theme(
+    plot.title       = element_text(face = "plain", size = ttl_pt2),
+    strip.background = element_blank(),
+    strip.text       = element_text(face = "plain")
+  ) +
+  txt_theme_1 +
+  line_theme
+
+umap_theme <- base_theme +
+  theme(
+    axis.title   = element_blank(),
+    axis.line.x  = element_blank(),
+    axis.line.y  = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text    = element_blank()
+  )
+
+box_theme <- base_theme +
+  theme(
+    legend.position = "none",
+    axis.line.x     = element_blank(),
+    axis.line.y     = element_blank(),
+    panel.border    = element_rect(fill = NA, color = ln_col, size = ln_pt),
+    axis.text.x     = element_text(angle = 45, hjust = 1),
+    axis.title.x    = element_blank()
+  )
+
+fade_0 <- "#FAFAFA"
+fade_1 <- "#F0F0F0"
+fade_2 <- "#D9D9D9"
+
+hist_y_lab <- "number of cells"
+
+# alpha for plots
+al <- 0.7
+
+# Okabe Ito color palettes
+ito_cols <- c(
+  palette_OkabeIto[c(1:3, 5)], "#D7301F",
+  palette_OkabeIto[c(4, 6)],   "#6A51A3",
+  palette_OkabeIto[7],         "#875C04",
+  "#065D43", "#F7AF34", "#00446E"
+)
+
+ito_cols <- ito_cols[3:length(ito_cols)] %>%
+  darken(0.2) %>%
+  c(ito_cols, ., "#686868", "#000000")
+
+# Set sample colors
+get_cols <- create_col_fun(ito_cols)
+
+sam_cols <- c(
+  "#0072B2", "#00446E",
+  "#F03B20", "#BD0026"
+)
+
+names(sam_cols) <- sam_lvls
+
+# CHIKV treatment groups
+chikv_infctd <- so_enr_df %>%
+  group_by(treatment) %>%
+  summarize(mn = mean(nCount_CHIKV), .groups = "drop") %>%
+  filter(mn == max(mn)) %>%
+  pull(treatment)
+
+# Cell type colors
+type_cols <- na.omit(unique(so_enr_df$cell_type))
+type_cols <- set_names(ito_cols[seq_along(type_cols)], type_cols)
+
+type_cols["unassigned"] <- "#999999"
+
+subtype_cols <- c(colnames(ref_lec), colnames(ref_fib))
+subtype_cols <- set_names(ito_cols[seq_along(subtype_cols)], subtype_cols)
+subtype_cols["unassigned"] <- "#999999"
+subtype_cols["other"]      <- fade_0
+
+lec_type_cols <- c(subtype_cols, type_cols[names(type_cols) != "unassigned"])
+lec_type_cols["CHIKV-low"]      <- "white"
+lec_type_cols["T cells"]        <- "black"
+lec_type_cols["B cells"]        <- "#875C04"
+lec_type_cols["Fibroblasts"]    <- "#00375B"
+lec_type_cols["unassigned-LEC"] <- "#676767"
+
+# CHIKV clusters colors
+grp_cols <- set_names(
+  c("#56B4E9", "#0072B2"),
+  chikv_grps
+)
+
+n_reps <- 3
+
+grp_rep_cols <- grp_cols %>% 
+  imap(~ set_names(
+    rep(.x, n_reps),
+    str_c(.y, "-", 1:n_reps)
+  )) %>%
+  flatten_chr()
+
+```
+
+```{r "qc"}
+
+qc_desc <- ""
+
+qc_chunks <- knit_expand(
+  file      = here(params$template_dir, "qc_template.Rmd"),
+  desc      = "qc_desc",
+  qc_meta   = "so_raw_df",  # meta.data for unfiltered sobj
+  filt_meta = "so_df"       # Filtered meta.data to use for UMAPs
+)
+
+```
+
+`r knit_child(text = qc_chunks)`
+
+##
+
+After filtering cells, the raw counts for each gene were divided by the total counts for the cell, multiplied by a scaling factor (10,000), and log-transformed (`NormalizeData`). The top 2000 genes that show the most cell-to-cell variation were then identified (`FindVariableFeatures`) and the data were scaled to prevent highly expressed genes from biasing the downstream analysis (`ScaleData`). For clustering and visualizing differences between cells, PCA and UMAP were used to reduce the dimensionality of the dataset (`RunPCA`, `RunUMAP`).
+
+```{r "sam umaps 1", fig.width = 15.5, fig.height = 13.5}
+
+# Sample UMAPs
+sam_labs <- get_nlab_fun(so_df, "sample")
+tot_lab  <- get_nlab_fun(so_df)
+
+rep_umap <- so_df %>%
+  plot_features(
+    feature   = "sample",
+    pt_size   = 1,
+    feat_lvls = names(sam_cols)
+  ) +
+  
+  guides(color = guide_legend(override.aes = list(size = 4.5))) +
+  scale_color_manual(values = sam_cols, labels = sam_labs) +
+  umap_theme +
+  theme(
+    legend.key.height = unit(45, "pt"),
+    legend.title      = element_blank(),
+    legend.text       = element_text(size = txt_pt1 * 1.5)
+  )
+
+sam_umap <- rep_umap +
+  geom_text(
+    aes(Inf, Inf),
+    label         = tot_lab,
+    check_overlap = TRUE,
+    color         = "black",
+    hjust         = 1,
+    vjust         = 1,
+    size          = (txt_pt1 / .pt) * 1.5
+  )
+
+sam_umap
+
+```
+
+UMAP projections are shown for cells divided by replicate, colors correspond to sample ID as shown above. The biological replicates show strong overlap and very similar overall structure, suggesting that batch effects are not impacting gene expression patterns. 
+
+```{r "sam umaps 2", fig.width = 20, fig.height = 5}
+
+sam_labs <- get_nlab_fun(so_df, "sample", nm = FALSE)
+
+sam_labs <- sam_labs() %>%
+  tibble(sample = names(.), n = .)
+
+rep_umap <- rep_umap +
+  facet_wrap(~ sample, nrow = 1) +
+  
+  geom_text(
+    aes(Inf, Inf, label = n),
+    data          = sam_labs,
+    check_overlap = TRUE,
+    color         = "black",
+    hjust         = 1,
+    vjust         = 1,
+    size          = (txt_pt1 / .pt) * 1.5
+  ) +
+  
+  scale_color_manual(values = sam_cols, labels = sam_labs) +
+  guides(color = guide_legend(override.aes = list(size = 4), ncol = 2)) +
+  theme(
+    legend.key.height = unit(20, "pt"),
+    legend.position   = "none",
+    strip.text        = element_text(size = ttl_pt2 * 1.2)
+  )
+
+rep_umap
+
+```
+
+---
+
+<br>
+
+<br>
+
+## Cell type annotation
+
+To identify cell clusters, a k-nearest neighbors graph was generated using the first 40 principal components (`FindNeighbors`). This graph was then used to iteratively group cells together using the Louvain method (`FindClusters`).
+
+Broad cell types were first assigned by comparing gene expression patterns for each cluster with data available from Immgen (`clustify`). UMAPs below show cell type annotations for different clustering resolutions, the number of distinct clusters is shown in parenthesis.
+
+```{r "type clusts", fig.width = 13, fig.height = 10.5}
+
+# Columns to plot
+c_clmns <- type_clsts %>%
+  map_chr(pluck, 1) %>%
+  unname()
+
+t_clmns <- type_clsts %>%
+  map_chr(pluck, 2) %>%
+  str_c("_type")
+
+r_clmns <- type_clsts %>%
+  map_chr(pluck, 2) %>%
+  str_c("_r")
+
+# Create UMAPs
+so %>%
+  plot_clust_rslns(
+    c_clmns = c_clmns,
+    t_clmns = t_clmns,
+    r_clmns = r_clmns
+  )
+
+```
+
+<br>
+
+UMAP projections are shown for the selected cell type annotations (clustering resolution `r params$type_res`) with cells colored by type. The fraction of cells belonging to each type is shown on the right.
+
+```{r "cell types", fig.width = 10, fig.height = 6}
+
+so_df %>%
+  create_umap_bars(
+    fill      = "cell_type",
+    grps      = "sample",
+    filt      = nCount_RNA > -1,
+    plot_clrs = type_cols,
+    list_out  = FALSE,
+    flip_bars = FALSE
+  )
+
+```
+
+---
+
+<br>
+
+<br>
+
+## Cell type markers
+
+```{r "MACRO MONO MARKERS", fig.width = 15, fig.height = 14, eval = FALSE}
+
+# x <- so %>%
+#   AddModuleScore(
+#     features = marks,
+#     name = names(marks)
+#   )
+#
+# x@meta.data %>%
+#   pivot_longer(cols = all_of(c("Macrophage1", "Monocyte2"))) %>%
+#   ggplot(aes(cell_type_clst, value, color = name)) +
+#   geom_boxplot() +
+#   base_theme +
+#   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+#   
+# x@meta.data %>%
+#   ggplot(aes(Macrophage1, Monocyte2, color = cell_type_clst)) +
+#   geom_point() +
+#   facet_wrap(~ cell_type_clst, scales = "free") +
+#   base_theme +
+#   theme(legend.position = "none")
+
+# Plot marker genes
+macro <- c(
+  # "Tfrc",   # Cd71
+  "Ptprc",  # Cd45
+  "Cd14",
+  "Fcgr4",  # Cd16
+  "Fcgr1",  # Cd64
+  "Cd68",
+  "Ccr5"
+)
+
+mon <- c(
+  # "Ptprc",   # Cd45
+  # "Cd14"
+  # "Fcgr4",   # Cd16
+  # "Pecam1",  # Cd31
+  # "Cd44",
+  # "Sell",    # Cd62l
+  "Ccr2",
+  "Itgam",   # Cd11b
+  "Spn",     # Cd43
+  "Csf1r",   # Cd115
+  "Cx3cr1",
+  "Adgre1"   # F4/80
+)
+
+marks <- list(
+  "Macrophage" = macro,
+  "Monocyte"   = mon
+)
+
+clrs <- c(
+  "Macrophage" = "#56B4E9",
+  "Monocyte"   = "#D7301F"
+)
+
+marks_umap <- marks %>%
+  imap(~ {
+    so %>%
+      FetchData(c("UMAP_1", "UMAP_2", .x)) %>%
+      pivot_longer(-c(UMAP_1, UMAP_2)) %>%
+      mutate(name = fct_relevel(name, .x)) %>%
+      plot_features(
+        feature     = "value",
+        pt_size     = 0.00001,
+        pt_outline  = 0.2,
+        plot_colors = c("white", clrs[.y])
+      ) +
+      facet_wrap(~ name, ncol = 4) +
+      ggtitle(.y) +
+      guides(color = guide_colorbar(barwidth = unit(5, "pt"))) +
+      umap_theme +
+      theme(
+        legend.title     = element_blank(),
+        panel.background = element_rect(fill = NA, color = ln_col)
+      )
+  }) %>%
+  plot_grid(
+    plotlist = .,
+    ncol     = 1,
+    align    = "vh",
+    axis     = "trbl"
+  )
+
+marks_umap
+
+```
+
+```{r "cell type marker chunks"}
+
+m_chunks <- knit_expand(
+  file     = here(params$template_dir, "marker_template.Rmd"),
+  so_in    = "so",         # Seurat object
+  clmn     = "cell_type",  # Column containing cell types
+  box_cols = "type_cols",  # Colors to use for boxplots
+  prefix   = NULL          # Prefix for file names
+)
+
+```
+
+`r knit_child(text = m_chunks)`
+
+## Endothelial cell annotations
+
+To classify LEC subtypes, cells were filtered to only include LECs and re-clustered. UMAPs are shown on the left with cells colored by sample ID. UMAPs shown on the right are colored by sample ID and divided by replicate ID.
+
+```{r "lec samples", fig.width = 10, fig.height = 6.5}
+
+# Create LEC UMAP
+sam_labs <- get_nlab_fun(so_lec_df, "sample", sep = " ")
+tot_lab  <- get_nlab_fun(so_lec_df)
+
+lec_umap <- so_lec_df %>%
+  plot_features(
+    feature     = "sample",
+    pt_size     = 0.5,
+    plot_colors = sam_cols,
+    feat_lvls   = names(sam_cols)
+  ) +
+  
+  scale_color_manual(values = sam_cols, labels = sam_labs) +
+  
+  guides(color = guide_legend(override.aes = list(size = 3), nrow = 2)) +
+  
+  umap_theme +
+  theme(
+    legend.position = "bottom",
+    legend.title    = element_blank()
+  )
+
+lec_umap_1 <- lec_umap +
+  geom_text(
+    aes(Inf, Inf),
+    label         = tot_lab,
+    check_overlap = TRUE,
+    color         = "black",
+    hjust         = 1,
+    vjust         = 1,
+    size          = txt_pt1 / .pt
+  )
+
+# Create UMAP split by replicate
+lec_umap_2 <- lec_umap +
+  facet_wrap(~ rep, ncol = 1) +
+  theme(
+    legend.position  = "none",
+    panel.background = element_rect(color = fade_1, fill = NA, size = 0.5)
+  )
+
+# Create final figure
+plot_grid(
+  lec_umap_1, lec_umap_2,
+  rel_widths = c(1, 0.5),
+  align      = "h",
+  axis       = "tb"
+)
+
+```
+
+<br>
+
+LEC subtypes were assigned using gene expression data for LEC subsets identified previously [Xiang et al.](https://pubmed.ncbi.nlm.nih.gov/32426372/). UMAPs below show LEC subtype annotations for different clustering resolutions, the number of distinct clusters is shown in parenthesis.
+
+```{r "lec clusts", fig.width = 11, fig.height = 10}
+
+# Columns to plot
+c_clmns <- lec_clsts %>%
+  map_chr(pluck, 1) %>%
+  unname()
+
+t_clmns <- lec_clsts %>%
+  map_chr(pluck, 2) %>%
+  str_c("_type")
+
+r_clmns <- lec_clsts %>%
+  map_chr(pluck, 2) %>%
+  str_c("_r")
+
+# Create UMAPs
+so_lec %>%
+  plot_clust_rslns(
+    c_clmns = c_clmns,
+    t_clmns = t_clmns,
+    r_clmns = r_clmns,
+    c_cols  = get_cols(85),
+    t_cols  = subtype_cols
+  )
+
+```
+
+<br>
+
+UMAP projections are shown for the selected LEC annotations (clustering resolution `r params$lec_res`) with cells colored by subtype, cells that are not LECs are shown in light grey. The fraction of cells belonging to each subtype is shown on the right. 
+
+```{r "lec types", fig.width = 10, fig.height = 6}
+
+so_df %>%
+  create_umap_bars(
+    fill      = "lec_subtype",
+    grps      = "sample",
+    filt      = cell_type == "Endothelial cells",
+    plot_clrs = subtype_cols,
+    flip_bars = FALSE,
+    list_out  = FALSE
+  )
+
+```
+
+<br>
+
+To assess the accuracy of LEC annotations, the subtype assignments were compared back to the reference data ("ref_type"). The correlation with the reference datasets is shown below. 
+
+```{r "lec type heatmap", fig.width = 12, fig.height = 5}
+
+# Format data for heatmap for each treatment group
+h_mat <- treats %>%
+  map_dfr(~ {
+    so_lec %>%
+      subset(subset = treatment == .x) %>%
+      clustify(
+        ref_mat     = ref_lec,
+        cluster_col = "lec_type",
+        seurat_out  = FALSE
+      ) %>%
+      as_tibble(rownames = "assigned_type") %>%
+      pivot_longer(
+        cols      = -assigned_type,
+        names_to  = "ref_type",
+        values_to = "r"
+      ) %>%
+      mutate(treatment = .x)
+  }) %>%
+  mutate(treatment = fct_relevel(treatment, treats))
+
+# Create subtype heatmaps for each treatment group
+h_mat %>%
+  ggplot(aes(ref_type, assigned_type, fill = r)) +
+  geom_tile(color = fade_0, size = 0.2) +
+  
+  geom_text(
+    aes(label = round(r, 2)),
+    data  = filter(h_mat, assigned_type == ref_type),
+    color = "white",
+    size  = txt_pt1 / .pt
+  ) +
+  
+  facet_wrap(~ treatment, nrow = 1) +
+  
+  guides(fill = bar_gd()) +
+  scale_fill_gradientn(colors = c(fade_0, "#E69F00")) +
+  base_theme +
+  theme(
+    axis.line.x = element_blank(),
+    axis.line.y = element_blank(),
+    axis.text.x = element_text(hjust = 1, angle = 45)
+  )
+
+```
+
+---
+
+<br>
+
+<br>
+
+## Endothelial markers
+
+The expression level for common LEC subtype markers is shown below for mock- and CHIKV-infected samples.
+
+```{r "lec markers", fig.width = 12, fig.height = 9}
+
+# LEC markers to plot
+# "Ccl21a"
+genes <- c(
+  "Ackr4",  "Madcam1", "Ccl20",
+  "Cd274",  "Lyve1",   "Foxc2",
+  "Marco",   "Ptx3"
+)
+
+# Boxplot data
+dat <- so %>%
+  FetchData(c("sample", "treatment", "lec_subtype", genes))
+
+# Create boxplots
+boxes <- treats %>%
+  map(~ {
+    d <- dat %>%
+      filter(treatment == .x)
+    
+    bx_labs <- get_nlab_fun(d, "lec_subtype", sep = " ")
+    
+    d %>%
+      pivot_longer(cols = all_of(genes)) %>%
+      ggplot(aes(lec_subtype, value, fill = lec_subtype)) + 
+      geom_boxplot(outlier.size = 0.1, fatten = 1, key_glyph = draw_key_point) +
+      
+      guides(fill = legd_gd(shape = 22, nrow = 4)) +
+      scale_fill_manual(values = subtype_cols, labels = bx_labs) +
+      facet_wrap(~ name, scales = "free_y", ncol = 2) +
+      
+      labs(y = "log normalized counts", title = .x) +
+      base_theme +
+      theme(
+        legend.position  = "top",
+        legend.title     = element_blank(),
+        axis.title.x     = element_blank(),
+        axis.text.x      = element_text(angle = 45, hjust = 1),
+        axis.line.x      = element_blank(),
+        axis.line.y      = element_blank(),
+        panel.background = element_rect(fill = NA, color = ln_col)
+      )
+  })
+
+# Create final figure
+plot_grid(plotlist = boxes, nrow = 1)
+
+```
+
+<br>
+
+```{r "lec marker chunks"}
+
+m_chunks <- knit_expand(
+  file     = here(params$template_dir, "marker_template.Rmd"),
+  so_in    = "so_lec",        # Seurat object
+  clmn     = "lec_type",      # Column containing cell types
+  box_cols = "subtype_cols",  # Colors to use for boxplots 
+  prefix   = "lec"            # Prefix for file names
+)
+
+```
+
+`r knit_child(text = m_chunks)`
+
+## Non-endothelial SC annotations
+
+To classify stromal subtypes, cells were filtered to only include stromal cells and re-clustered. UMAPs are shown on the left with cells colored by sample ID. UMAPs shown on the right are colored by sample ID and divided by replicate ID.
+
+```{r "fib samples", fig.width = 10, fig.height = 6.5}
+
+# Create LEC UMAP
+sam_labs <- get_nlab_fun(so_fib_df, "sample", sep = " ")
+tot_lab  <- get_nlab_fun(so_fib_df)
+
+fib_umap <- so_fib_df %>%
+  plot_features(
+    feature     = "sample",
+    pt_size     = 0.5,
+    plot_colors = sam_cols,
+    feat_lvls   = names(sam_cols)
+  ) +
+  
+  scale_color_manual(values = sam_cols, labels = sam_labs) +
+  
+  guides(color = guide_legend(override.aes = list(size = 3), nrow = 2)) +
+  
+  umap_theme +
+  theme(
+    legend.position = "bottom",
+    legend.title    = element_blank()
+  )
+
+fib_umap_1 <- fib_umap +
+  geom_text(
+    aes(Inf, Inf),
+    label         = tot_lab,
+    check_overlap = TRUE,
+    color         = "black",
+    hjust         = 1,
+    vjust         = 1,
+    size          = txt_pt1 / .pt
+  )
+
+# Create UMAP split by replicate
+fib_umap_2 <- fib_umap +
+  facet_wrap(~ rep, ncol = 1) +
+  theme(
+    legend.position  = "none",
+    panel.background = element_rect(color = fade_1, fill = NA, size = 0.5)
+  )
+
+# Create final figure
+plot_grid(
+  fib_umap_1, fib_umap_2,
+  rel_widths = c(1, 0.42),
+  align      = "h",
+  axis       = "tb"
+)
+
+```
+
+<br>
+
+Stromal subtypes were assigned using gene expression data for stromal subsets identified previously [Rodda et al.](https://pubmed.ncbi.nlm.nih.gov/29752062/). UMAPs below show LEC subtype annotations for different clustering resolutions, the number of distinct clusters is shown in parenthesis.
+
+```{r "fib clusts", fig.width = 11, fig.height = 10}
+
+# Columns to plot
+c_clmns <- fib_clsts %>%
+  map_chr(pluck, 1) %>%
+  unname()
+
+t_clmns <- fib_clsts %>%
+  map_chr(pluck, 2) %>%
+  str_c("_type")
+
+r_clmns <- fib_clsts %>%
+  map_chr(pluck, 2) %>%
+  str_c("_r")
+
+# Create UMAPs
+so_fib %>%
+  plot_clust_rslns(
+    c_clmns = c_clmns,
+    t_clmns = t_clmns,
+    r_clmns = r_clmns,
+    c_cols  = get_cols(85),
+    t_cols  = subtype_cols
+  )
+
+```
+
+<br>
+
+UMAP projections are shown for the selected non-endothelial stromal cell annotations (clustering resolution `r params$fib_res`) with cells colored by subtype, other cells are shown in light grey. The fraction of cells belonging to each subtype is shown on the right. 
+
+```{r "fib types", fig.width = 10, fig.height = 6}
+
+# Create UMAP
+tot_lab <- get_nlab_fun(so_df)
+
+fib_umap <- so_df %>%
+  mutate(fib_subtype = fct_relevel(fib_subtype, names(subtype_cols))) %>%
+  ggplot(aes(UMAP_1, UMAP_2, color = fib_subtype)) +
+  geom_point(size = 0.01) +
+  
+  geom_text(
+    aes(Inf, Inf),
+    label         = tot_lab,
+    check_overlap = TRUE,
+    color         = "black",
+    hjust         = 1,
+    vjust         = 1,
+    size          = txt_pt1 / .pt
+  ) +
+  
+  scale_color_manual(values = subtype_cols) +
+  guides(color = guide_legend(override.aes = list(size = 3))) + 
+  umap_theme +
+  theme(legend.position = "none")
+
+# Create bar graphs
+fib_labs <- get_nlab_fun(so_df, "fib_subtype", sep = " ")
+
+fib_bars <- so_df %>%
+  filter(cell_type %in% c("Fibroblasts", "Stromal cells (DN)")) %>%
+  mutate(
+    fib_subtype = fct_relevel(fib_subtype, names(subtype_cols)),
+    sample      = fct_relevel(sample, names(sam_cols))
+  ) %>%
+  
+  ggplot(aes(sample, fill = fib_subtype)) +
+  
+  geom_bar(
+    position  = "fill",
+    color     = "black",
+    size      = 0.2,
+    alpha     = 0.9,
+    key_glyph = draw_key_point
+  ) +
+  
+  guides(fill = legd_gd(shape = 22, nrow = 11)) +
+  
+  scale_fill_manual(values = subtype_cols, labels = fib_labs) +
+  scale_y_continuous(breaks = c(0, 0.5, 1)) +
+  labs(y = "fraction of cells") +
+  base_theme +
+  theme(
+    legend.position = "top",
+    legend.title    = element_blank(),
+    axis.title.x    = element_blank(),
+    axis.text.x     = element_text(angle = 45, hjust = 1)
+  )
+
+# Create final figure
+plot_grid(
+  fib_umap, fib_bars,
+  rel_widths = c(1, 0.6)
+)
+
+```
+
+<br>
+
+To assess the accuracy of stromal cell annotations, the subtype assignments were compared back to the reference data ("ref_type"). The correlation with the reference datasets is shown below. 
+
+```{r "fib type heatmap", fig.width = 12, fig.height = 5}
+
+# Format data for heatmap for each treatment group
+h_mat <- treats %>%
+  map_dfr(~ {
+    so_fib %>%
+      subset(subset = treatment == .x) %>%
+      clustify(
+        ref_mat     = ref_fib,
+        cluster_col = "fib_type",
+        seurat_out  = FALSE
+      ) %>%
+      as_tibble(rownames = "assigned_type") %>%
+      pivot_longer(
+        cols      = -assigned_type,
+        names_to  = "ref_type",
+        values_to = "r"
+      ) %>%
+      mutate(treatment = .x)
+  }) %>%
+  mutate(treatment = fct_relevel(treatment, treats))
+
+# Create subtype heatmaps for each treatment group
+h_mat %>%
+  ggplot(aes(ref_type, assigned_type, fill = r)) +
+  geom_tile(color = fade_0, size = 0.2) +
+  
+  geom_text(
+    aes(label = round(r, 2)),
+    data  = filter(h_mat, assigned_type == ref_type),
+    color = "white",
+    size  = txt_pt1 / .pt
+  ) +
+  
+  facet_wrap(~ treatment, nrow = 1) +
+  
+  guides(fill = bar_gd()) +
+  scale_fill_gradientn(colors = c(fade_0, "#035B8F")) +
+  base_theme +
+  theme(
+    axis.line.x = element_blank(),
+    axis.line.y = element_blank(),
+    axis.text.x = element_text(hjust = 1, angle = 45)
+  )
+
+```
+
+---
+
+<br>
+
+<br>
+
+## Non-endothelial SC markers
+
+```{r "fib marker chunks"}
+
+m_chunks <- knit_expand(
+  file     = here(params$template_dir, "marker_template.Rmd"),
+  so_in    = "so_fib",       # Seurat object
+  clmn     = "fib_type",     # Column containing cell types
+  box_cols = "subtype_cols", # Colors to use for boxplots 
+  prefix   = "fib"           # Prefix for file names
+)
+
+```
+
+`r knit_child(text = m_chunks)`
+
+## CHIKV enrichment
+
+```{r "CELL TYPE CHIKV COUNTS", fig.width = 15, fig.height = 6, eval = FALSE}
+
+# Histograms
+hist_lvls <- chikv_dat %>%
+  filter(tot_nCount_CHIKV > 0) %>%
+  group_by(lec_type) %>%
+  summarize(
+    stats = list(boxplot.stats(tot_nCount_CHIKV)),
+    med   = map_dbl(stats, ~ .x$stats[3]),
+    qrt3  = map_dbl(stats, ~ .x$stats[4]),
+    qrt4  = map_dbl(stats, ~ .x$stats[5]),
+    max   = max(tot_nCount_CHIKV),
+    .groups = "drop"
+  ) %>%
+  arrange(across(c(med, qrt3, qrt4, max, lec_type), desc)) %>%
+  pull(lec_type)
+
+chikv_dat %>%
+  mutate(lec_type = fct_relevel(lec_type, hist_lvls)) %>%
+  
+  ggplot(aes(tot_nCount_CHIKV + 1, ..count.. + 1, fill = lec_type)) +
+  geom_histogram(bins = 20) +
+  facet_wrap(~ lec_type) +
+  scale_fill_manual(values = lec_type_cols) +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(x = "CHIKV counts", y = "Number of cells") +
+  base_theme +
+  theme(
+    legend.position = "none",
+    axis.line.x     = element_blank(),
+    axis.line.y     = element_blank(),
+    panel.border    = element_rect(fill = NA, color = ln_col, size = ln_pt)
+  )
+
+```
+
+```{r "CHIKV-high data"}
+
+chikv_dat <- so_enr_df %>%
+  filter(qc_class == "pass" & !is.na(UMAP_1)) %>%
+  mutate(
+    across(starts_with("enr_"), replace_na, 0),
+    tot_nCount_CHIKV = nCount_CHIKV + enr_nCount_CHIKV,
+    tot_nCount_RNA   = nCount_RNA + enr_nCount_RNA,
+    tot_pct_CHIKV    = tot_nCount_CHIKV / tot_nCount_RNA * 100,
+    
+    tot_5            = CHIKV_5 + enr_5,
+    tot_sgRNA        = CHIKV_sgRNA + enr_sgRNA,
+    tot_neg          = CHIKV_neg   + enr_neg,
+    
+    chikv_grp        = if_else(tot_nCount_CHIKV > 0, "CHIKV-high", "CHIKV-low"),
+    chikv_type       = if_else(chikv_grp == "CHIKV-high", lec_type, chikv_grp)
+  )
+
+so_chikv <- so %>%
+  AddMetaData(column_to_rownames(chikv_dat, "cell_id"))
+
+```
+
+CHIKV-high cells were classified as cells with at least one CHIKV count for either the bulk or enriched library. CHIKV counts are shown below for CHIKV-high cells for the bulk and enriched libraries. The number of cells with at least one CHIKV count is shown on each plot. Cell types are shown on the right for CHIKV-high cells identified from the bulk or enriched libraries.
+
+```{r "CHIKV-high counts hist"}
+
+feats <- c(
+  "bulk"     = "nCount_CHIKV",
+  "enriched" = "enr_nCount_CHIKV"
+)
+
+# Create histograms
+# only include cells with >0 counts
+hist_dat <- chikv_dat %>%
+  select(cell_id, lec_type, sample, all_of(feats)) %>%
+  pivot_longer(all_of(names(feats))) %>%
+  filter(value > 0) %>%
+  group_by(sample, name) %>%
+  mutate(
+    n = n_distinct(cell_id),
+    n = str_c("n = ", n)
+  ) %>%
+  ungroup()
+  
+chikv_hist <- hist_dat %>%
+  ggplot(aes(value, ..count.. + 1, fill = name)) +
+  geom_histogram(bins = 30) +
+  
+  geom_text(
+    aes(Inf, Inf, label = n),
+    check_overlap = TRUE,
+    hjust         = 1.1,
+    vjust         = 1.5
+  ) +
+  
+  facet_grid(name ~ sample) +
+  scale_fill_manual(values = c("#00375B", "#E69F00")) +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(x = "CHIKV counts", y = "number of cells + 1") +
+  box_theme +
+  theme(
+    axis.text.x  = element_text(angle = 0, hjust = 0.5),
+    axis.title.x = element_text()
+  )
+
+```
+
+```{r "CHIKV-high types bars", fig.width = 15, fig.height = 5}
+
+bar_lvls <- hist_dat %>%
+  group_by(lec_type) %>%
+  summarize(
+    n       = n_distinct(cell_id),
+    .groups = "drop"
+  ) %>%
+  mutate(lab = str_c(lec_type, " (n = ", n, ")")) %>%
+  arrange(desc(n))
+
+bar_labs <- function(x) {
+  labs <- set_names(bar_lvls$lab, bar_lvls$lec_type)
+  labs[x]
+}
+
+chikv_bar <- hist_dat %>%
+  mutate(lec_type = fct_relevel(lec_type, bar_lvls$lec_type)) %>%
+  ggplot(aes(name, fill = lec_type)) +
+  geom_bar() +
+  scale_fill_manual(values = lec_type_cols, labels = bar_labs) +
+  labs(y = "number of cells") +
+  base_theme +
+  theme(
+    legend.title = element_blank(),
+    axis.title.x = element_blank(),
+    axis.text.x  = element_text(size = txt_pt2)
+  )
+
+# Create final figure
+plot_grid(
+  chikv_hist, NULL, chikv_bar,
+  rel_widths = c(1, 0.2, 0.7),
+  align      = "h",
+  axis       = "tb",
+  nrow       = 1
+)
+
+```
+
+<br>
+
+The percentage of bulk + enriched counts aligning to the CHIKV genome is shown below.
+
+```{r "percent CHIKV UMAP", fig.width = 14.5, fig.height = 13.5}
+
+# Add pseudo count
+# smallest non-zero value divided by 2
+pseudo <- chikv_dat %>%
+  filter(tot_pct_CHIKV > 0) %>%
+  pull(tot_pct_CHIKV) %>%
+  min() %>%
+  (function(x) x / 2)
+
+chikv_dat %>%
+  mutate("% CHIKV counts" = tot_pct_CHIKV + pseudo) %>%
+  plot_features(
+    feature     = "% CHIKV counts",
+    pt_size     = 2,
+    pt_outline  = 0.1
+  ) +
+  scale_color_gradientn(colors = c("white", "#D7301F"), trans = "log10") +
+  guides(color = guide_colorbar(barheight = unit(0.2, "cm"), title.position = "top")) +
+  theme_void() +
+  theme(
+    legend.position      = "top",
+    legend.justification = c(0.1, 1),
+    legend.title         = element_text(size = txt_pt2 * 1.5),
+    legend.text          = element_text(size = txt_pt1, angle = 45, hjust = 1)
+  )
+
+```
+
+<br>
+
+CHIKV sgRNA, 5', and minus strand (neg) counts (bulk + enriched) are shown below.
+
+```{r "CHIKV counts UMAP", fig.width = 17, fig.height = 6}
+
+feats <- c(
+  "tot_sgRNA" = "#E69F00",
+  "tot_5"     = "#009E73",
+  "tot_neg"   = "#0072B2"
+)
+
+u_dat <- chikv_dat %>%
+  select(cell_id, starts_with("UMAP_"), sample, all_of(names(feats)))
+
+umaps <- feats %>%
+  imap(~ {
+    ttl <- str_remove(.y, "^tot_")
+    ttl <- str_replace(ttl, "(?<=^[0-9]$)", "'")
+    ttl <- str_c(ttl, " counts + 1")
+    
+    u_dat %>%
+      mutate(!!sym(.y) := !!sym(.y) + 1) %>%
+      plot_features(
+        feature    = .y,
+        pt_size    = 1,
+        pt_outline = 0.1
+      ) +
+      scale_color_gradientn(colors = c("white", .x), trans = "log10") +
+      guides(color = guide_colorbar(barheight = unit(0.2, "cm"), title.position = "top", title = ttl)) +
+      theme_void() +
+      theme(
+        legend.position      = "top",
+        legend.justification = c(0.1, 1),
+        legend.title         = element_text(size = txt_pt2),
+        legend.text          = element_text(size = txt_pt1),
+        panel.border         = element_rect(fill = NA, color = ln_col, size = ln_pt)
+      )
+  })
+
+plot_grid(
+  plotlist = umaps,
+  align    = "vh",
+  axis     = "trbl",
+  nrow     = 1
+)
+
+```
+
+---
+
+<br>
+
+## CHIKV-high cell types
+
+CHIKV-high cells were classified as cells with at least one total CHIKV count (bulk + enriched). UMAP projection is shown below with CHIKV-high cells colored by cell type.
+
+```{r "CHIKV-high types UMAP", fig.width = 15.5, fig.height = 13.5}
+
+chikv_labs <- chikv_dat %>%
+  get_nlab_fun("chikv_type")
+
+chikv_lvls <- names(chikv_labs())
+chikv_lvls <- chikv_lvls[chikv_lvls != "CHIKV-low"]
+chikv_lvls <- rev(c(chikv_lvls, "CHIKV-low"))
+
+chikv_dat %>%
+  plot_features(
+    feature     = "chikv_type",
+    feat_lvls   = chikv_lvls,
+    pt_size     = 2,
+    pt_outline  = 0.1,
+    outline_pos = "bottom"
+  ) +
+  umap_theme +
+  scale_color_manual(values = lec_type_cols, labels = chikv_labs) +
+  guides(color = guide_legend(reverse = TRUE, override.aes = list(size = 4.5))) +
+  theme(
+    legend.title      = element_blank(),
+    legend.key.height = unit(45, "pt"),
+    legend.text       = element_text(size = txt_pt1 * 1.5)
+  )
+
+```
+
+<br>
+
+The fraction of cells classified as CHIKV-high is shown below for each cell type.
+
+```{r "fraction CHIKV-high", fig.width = 15, fig.height = 6}
+
+# Only include CHIKV-infected samples
+# only show cell types with >2 cells
+bar_dat <- chikv_dat %>%
+  filter(treatment == chikv_infctd) %>%
+  group_by(lec_type, sample) %>%
+  mutate(
+    n        = n_distinct(cell_id),
+    n        = str_c(lec_type, "\n(n = ", n, ")"),
+    n_high   = length(lec_type[tot_nCount_CHIKV > 0]),
+    pct_high = n_high / n_distinct(cell_id) * 100,
+    nm       = str_c(sample, "_", lec_type)
+  ) %>%
+  filter(n() > 2) %>%
+  ungroup() %>%
+  distinct(sample, lec_type, nm, n, pct_high) %>%
+  mutate(nm = fct_reorder(nm, pct_high, max, .desc = TRUE))
+
+bar_labs <- function(x) {
+  labs <- set_names(bar_dat$n, bar_dat$nm)
+  labs[x]
+}
+
+bar_dat %>%
+  ggplot(aes(nm, pct_high, fill = lec_type)) +
+  geom_col() +
+  scale_y_continuous(labels = (function(x) str_c(x, "%"))) +
+  scale_fill_manual(values = lec_type_cols) +
+  scale_x_discrete(labels = bar_labs) +
+  labs(y = "percent CHIKV-high cells") +
+  facet_wrap(~ sample, scales = "free_x") +
+  box_theme
+
+```
+
+<br>
+
+CHIKV counts (bulk + enriched) are shown below for each cell type for CHIKV-high cells.
+
+```{r "CHIKV counts boxes", fig.width = 15, fig.height = 6}
+
+# Feature to plot
+feat <- "tot_nCount_CHIKV"
+ttl  <- "CHIKV counts"
+
+# Data for boxplots
+bx_dat <- chikv_dat %>%
+  filter(!!sym(feat) > 0) %>%
+  mutate(nm = str_c(sample, "_", lec_type))
+
+# Boxplot labels and levels
+bx_lvls <- bx_dat %>%
+  group_by(sample, lec_type, nm) %>%
+  summarize(
+    n       = n_distinct(cell_id),
+    stats   = list(boxplot.stats(log10(!!sym(feat)))),
+    med     = map_dbl(stats, ~ .x$stats[3]),
+    qrt3    = map_dbl(stats, ~ .x$stats[4]),
+    qrt4    = map_dbl(stats, ~ .x$stats[5]),
+    max     = max(!!sym(feat)),
+    .groups = "drop"
+  ) %>%
+  mutate(n = str_c(lec_type, "\n(n = ", n, ")")) %>%
+  arrange(desc(med), desc(qrt3), desc(qrt4), desc(max), lec_type)
+
+bx_labs <- function(x) {
+  labs <- set_names(bx_lvls$n, bx_lvls$nm)
+  labs[x]
+}
+
+# Plot percent CHIKV counts
+bx_dat %>%
+  mutate(nm = fct_relevel(nm, bx_lvls$nm)) %>%
+  
+  ggplot(aes(nm, !!sym(feat), color = lec_type)) +
+  geom_boxplot(size = 1) +
+
+  scale_color_manual(values = lec_type_cols) +
+  scale_x_discrete(labels = bx_labs) +
+  scale_y_continuous(trans = "log10") +
+  labs(y = ttl) +
+  facet_wrap(~ sample, scales = "free_x") +
+  box_theme
+
+```
+
+<br>
+
+The percentage of counts aligning to the CHIKV genome is shown below for each cell type for CHIKV-high cells.
+
+```{r "percent CHIKV boxes", fig.width = 15, fig.height = 6}
+
+# Feature to plot
+feat <- "tot_pct_CHIKV"
+ttl  <- "% CHIKV counts"
+
+# Data for boxplots
+bx_dat <- chikv_dat %>%
+  filter(!!sym(feat) > 0) %>%
+  mutate(nm = str_c(sample, "_", lec_type))
+
+# Boxplot labels and levels
+bx_lvls <- bx_dat %>%
+  group_by(sample, lec_type, nm) %>%
+  summarize(
+    n       = n_distinct(cell_id),
+    stats   = list(boxplot.stats(log10(!!sym(feat)))),
+    med     = map_dbl(stats, ~ .x$stats[3]),
+    qrt3    = map_dbl(stats, ~ .x$stats[4]),
+    qrt4    = map_dbl(stats, ~ .x$stats[5]),
+    max     = max(!!sym(feat)),
+    .groups = "drop"
+  ) %>%
+  mutate(n = str_c(lec_type, "\n(n = ", n, ")")) %>%
+  arrange(desc(med), desc(qrt3), desc(qrt4), desc(max), lec_type)
+
+bx_labs <- function(x) {
+  labs <- set_names(bx_lvls$n, bx_lvls$nm)
+  labs[x]
+}
+
+# Plot percent CHIKV counts
+bx_dat %>%
+  mutate(nm = fct_relevel(nm, bx_lvls$nm)) %>%
+  
+  ggplot(aes(nm, !!sym(feat), color = lec_type)) +
+  geom_boxplot(size = 1) +
+
+  scale_color_manual(values = lec_type_cols) +
+  scale_x_discrete(labels = bx_labs) +
+  scale_y_continuous(labels = (function(x) str_c(x, "%")), trans = "log10") +
+  labs(y = ttl) +
+  facet_wrap(~ sample, scales = "free_x") +
+  box_theme
+
+```
+
+---
+
+<br>
+
+## CHIKV markers
+
+### `r chikv_grps[2]` cell types {.tabset .tabset-pills}
+
+Differentially expressed genes were identified for each cell type by comparing replicates from the `r chikv_grps[1]` and `r chikv_grps[2]` groups. The top upregulated `r chikv_grps[2]` genes for the "`r chikv_infctd`" group are shown below. GO terms for marker genes are shown at the bottom. This analysis was only performed for cell types that were identified in all samples.
+
+```{r "chikv-high type marks", fig.width = 10, fig.height = 6, results = "asis"}
+
+# Input data
+so_chikv_clust <- so_chikv %>%
+  subset(treatment == "CHIKV") %>%
+  mutate_meta(mutate, grp_rep = str_c(chikv_grp, "-", rep))
+
+Idents(so_chikv_clust) <- so_chikv_clust %>%
+  FetchData("chikv_grp")
+
+# Cell types to test
+clmn <- "lec_type"
+
+chikv_sams <- unique(so_chikv_clust$sample)
+
+chikv_types <- so_chikv_clust@meta.data %>%
+  group_by(!!sym(clmn), sample, chikv_grp) %>%
+  filter(n() >= 3) %>%
+  
+  group_by(!!sym(clmn), sample) %>%
+  filter(all(names(grp_cols) %in% chikv_grp)) %>%
+  
+  group_by(!!sym(clmn), chikv_grp) %>%
+  filter(all(chikv_sams %in% sample)) %>%
+  
+  pull(clmn) %>%
+  unique()
+
+# Create figure panels
+for (tp in chikv_types) {
+  cat("\n#### ", tp, "\n", sep = "")
+  
+  prfx <- str_replace_all(tp, " ", "_")
+  prfx <- str_remove_all(prfx, "[\\)\\(]")
+  prfx <- str_c(str_to_lower(chikv_grps[2]), prfx, sep = "_")
+
+  marker_fig <- so_chikv_clust %>%
+    subset(subset = !!sym(clmn) == tp) %>%
+    
+    create_marker_fig(
+      ident_1     = chikv_grps[2],
+      grp_var     = "rep",
+      min_fc      = 0.25,
+      pval        = 0.05,
+      only_pos    = TRUE,
+      box_x       = "grp_rep",
+      n_genes     = 30,
+      box_ncol    = 10,
+      box_nrow    = 3,
+      box_cols    = grp_rep_cols,
+      show_go     = FALSE,
+      file_dir    = table_dir,
+      file_prefix = prfx,
+      overwrite   = params$overwrite
+    )
+  
+  cat(N_MARKERS, "marker genes and", N_GO_TERMS, "GO terms were identified.")
+  print(marker_fig)
+  cat("\n\n<br>\n\n")
+}
+
+```
+
+###
+
+Marco expression is shown below for CHIKV-low and -high cells for CHIKV-infected samples. p-values are shown above each plot.
+
+```{r "Marco expression", fig.width = 15, fig.height = 7, eval = FALSE}
+
+genes <- c("Marco", "Mxra8")
+feats <- c("lec_type", "chikv_grp", "sample", genes)
+
+bx_dat <- so_chikv_clust %>%
+  FetchData(feats) %>%
+  rownames_to_column("cell_id") %>%
+  mutate(chikv_grp = fct_relevel(chikv_grp, chikv_grps)) %>%
+  pivot_longer(all_of(genes), names_to = "gene") %>%
+  group_by(chikv_grp, sample) %>%
+  mutate(
+    n = n_distinct(cell_id),
+    n = str_c("n = ", comma(n))
+  ) %>%
+  ungroup()
+
+bx_labs <- bx_dat %>%
+  group_by(chikv_grp, sample) %>%
+  get_nlab_fun()
+
+gene_bxs <- genes %>%
+  map(~ {
+    bx_dat %>%
+      filter(gene == .x) %>%
+      ggplot(aes(lec_type, value, color = lec_type)) +
+      geom_boxplot(size = 1) +
+      
+      geom_text(
+        aes(x = Inf, y = Inf, label= n),
+        hjust         = 1.2,
+        vjust         = 1.7,
+        color         = "black",
+        check_overlap = T
+      ) +
+      
+      facet_grid(chikv_grp ~ sample) +
+      labs(y = str_c(.x, " expression")) +
+      scale_color_manual(values = lec_type_cols) +
+      box_theme
+  })
+
+gene_bxs[[1]]
+
+```
+
+```{r "Marco expression 2", fig.width = 15, fig.height = 5}
+
+# Helper to create epxression boxplots
+create_marco_boxes <- function(df, gene_to_plot) {
+  
+  # Helper to format p-values
+  format_p_val <- function(pval, digits = 2, prefix = "") {
+    
+    if (is.na(pval)) {
+      return("")
+    }
+    
+    p <- pval
+    
+    p <- p %>%
+      scales::scientific(digits = digits) %>%
+      str_split("e") %>%
+      unlist()
+    
+    expt <- as.numeric(p[2])
+    p[2] <- as.character(expt)  # Converting to numeric and back removes extra zeros and "+"
+    
+    if (expt < -digits) {
+      p <- p %>%
+        str_c(collapse = "x10\"^\"") %>%
+        str_c("\"", prefix, ., "\"")
+      
+    } else {
+      prs <- FALSE
+      p   <- round(pval, digits = digits)
+      p   <- str_c(prefix, p)
+    }
+    
+    p
+  }
+  
+  # Plot levels
+  dat <- df %>%
+    filter(gene == gene_to_plot) %>%
+    mutate(type_grp = str_c(lec_type, "_", chikv_grp))
+  
+  bx_lvls <- dat %>%
+    group_by(lec_type) %>%
+    summarize(mean = mean(value)) %>%
+    arrange(desc(mean)) %>%
+    pull(lec_type)
+  
+  # p-values for plot
+  # remove samples with only one chikv_grp present
+  # NAs are introduced when both samples have all the same value
+  p_vals <- dat %>%
+    group_by(lec_type, sample) %>%
+    filter(n_distinct(chikv_grp) > 1) %>%
+    ungroup() %>%
+    select(!c(cell_id, n, gene, type_grp)) %>%
+    pivot_wider(names_from = "chikv_grp", values_from = "value") %>%
+    mutate(
+      p_val = map2(`CHIKV-low`, `CHIKV-high`, wilcox.test),
+      p_val = map_dbl(p_val, ~ tidy(.x)$p.value),
+      p_adj = p.adjust(p_val, method = "bonferroni")
+    )
+  
+  p_vals <- p_vals %>%
+    rowwise() %>%
+    mutate(p_val = format_p_val(p_val)) %>%
+    ungroup() %>%
+    select(lec_type, sample, p_val)
+  
+  # Add p-values to plot data
+  bx_dat <- dat %>%
+    left_join(p_vals, by = c("lec_type", "sample")) %>%
+    mutate(
+      p_val     = replace_na(p_val, ""),
+      chikv_grp = fct_relevel(chikv_grp, chikv_grps),
+      lec_type  = fct_relevel(lec_type, bx_lvls)
+    )
+  
+  # Create boxplots
+  res <- bx_dat %>%  
+    ggplot(aes(lec_type, value, fill = lec_type, alpha = chikv_grp)) +
+    geom_boxplot(
+      key_glyph    = draw_key_point,
+      outlier.size = 0.5
+    ) +
+    
+    geom_text(
+      aes(y = Inf, label = p_val),
+      color         = "black",
+      alpha         = 1,
+      parse         = TRUE,
+      vjust         = 1.5,
+      check_overlap = TRUE
+    ) +
+    
+    labs(y = str_c(gene_to_plot, " expression")) +
+    
+    guides(
+      fill  = FALSE,
+      alpha = guide_legend(override.aes = list(size = 3, shape = 15))
+    ) +
+    
+    scale_fill_manual(values = lec_type_cols) +
+    scale_alpha_manual(values = c(0.5, 1)) +
+    facet_wrap(~ sample, nrow = 2, strip.position = "right") +
+    box_theme +
+    theme(
+      legend.position = "top",
+      legend.title    = element_blank()
+    )
+  
+  res
+}
+
+genes <- c("Marco", "Mxra8")
+feats <- c("lec_type", "chikv_grp", "sample", genes)
+
+bx_dat <- so_chikv_clust %>%
+  FetchData(feats) %>%
+  rownames_to_column("cell_id") %>%
+  mutate(chikv_grp = fct_relevel(chikv_grp, chikv_grps)) %>%
+  pivot_longer(all_of(genes), names_to = "gene") %>%
+  group_by(chikv_grp, sample) %>%
+  mutate(
+    n = n_distinct(cell_id),
+    n = str_c("n = ", comma(n))
+  ) %>%
+  ungroup()
+
+
+bx_dat %>%
+  create_marco_boxes("Marco")
+
+```
+
+<br>
+
+Mxra8 expression is shown below for CHIKV-low and -high cells for CHIKV-infected samples. p-values are shown above each plot.
+
+```{r "Mxra8 expression", fig.width = 15, fig.height = 7, eval = FALSE}
+
+gene_bxs[[2]]
+
+```
+
+```{r "Mxra8 expression 2", fig.width = 15, fig.height = 5}
+
+bx_dat %>%
+  create_marco_boxes("Mxra8")
+
+```
+
+---
+
+<br>
+
+## fLEC markers
+
+UMAP projects show expression of genes upregulated in CHIKV-high fLECs. UMAPs only include fLECs from CHIKV-infected samples. The mean expression and the percentage of cells expressing each gene is shown above each plot.
+
+```{r "fLEC top genes", fig.width = 13, fig.height = 20}
+
+# Point size for plots
+pt_size <- 5
+pt_outline <- 1
+
+# Genes to plot
+genes <- c(
+  "Marco",  "Galnt1",    "F8",
+  "Cyp4b1", "Csf1",      "Tspan7",
+  "Gpr182", "Serpinb6b", "Ccdc152"
+)
+
+genes <- set_names(
+  ito_cols[-6][seq_along(genes)],
+  genes
+)
+
+# Data to use for plotting
+feats <- c(
+  "UMAP_1",   "UMAP_2",
+  "lec_type", "chikv_grp",
+  "sample",   names(genes)
+)
+
+fLEC_dat <- so_chikv_clust %>%
+  FetchData(feats) %>%
+  rownames_to_column("cell_id") %>%
+  filter(lec_type == "fLEC") %>%
+  mutate(chikv_grp = fct_relevel(chikv_grp, chikv_grps)) %>%
+  arrange(chikv_grp)
+
+grp_labs <- get_nlab_fun(fLEC_dat, "chikv_grp", sep = " ")
+
+fLEC_dat <- fLEC_dat %>%
+  pivot_longer(all_of(names(genes)), names_to = "gene") %>%
+  
+  group_by(gene, chikv_grp) %>%
+  mutate(
+    mean = mean(value),
+    n     = n_distinct(cell_id),
+    n_pos = length(value[value > 0]),
+    pct   = n_pos / n
+  ) %>%
+  ungroup()
+
+  
+# Theme for plots
+th <- umap_theme +
+  theme(
+    legend.position      = "top",
+    legend.justification = 0,
+    legend.title         = element_blank(),
+    legend.direction     = "vertical",
+    strip.text           = element_text(size = txt_pt2)
+  )
+
+# chikv_grp UMAP
+grp_umap <- fLEC_dat %>%
+  ggplot(aes(UMAP_1, UMAP_2)) +
+  geom_point(size = pt_size + pt_outline, show.legend = FALSE) +
+  geom_point(aes(color = chikv_grp), size = pt_size) +
+  scale_color_manual(values = grp_cols, labels = grp_labs) +
+  th +
+  theme(plot.margin = margin(7, 80, 7, 160))
+
+# Gene UMAPs
+gene_umaps <- genes %>%
+  imap(~ {
+    d <- fLEC_dat %>%
+      filter(gene == .y) %>%
+      rename(!!sym(.y) := value)
+    
+    strip_labs <- function(x) {
+      d <- d %>%
+        distinct(chikv_grp, gene, mean, pct) %>%
+        mutate(lab = str_c(chikv_grp, "\n", percent(pct), ", mean: ", round(mean, 2)))
+      
+      d <- set_names(d$lab, d$chikv_grp)
+      
+      d[x]
+    }
+    
+    d %>%
+      plot_features(
+        feature     = .y,
+        pt_size     = pt_size,
+        pt_outline  = pt_outline,
+      ) +
+      scale_color_gradientn(colours = c("white", .x), breaks = 0:10) +
+      facet_wrap(~ chikv_grp, labeller = as_labeller(strip_labs)) +
+      guides(color = guide_colorbar(
+        title.position = "top",
+        title.hjust    = 0,
+        barheight      = unit(5, "pt"))
+      ) +
+      th +
+      theme(
+        legend.title     = element_text(),
+        legend.direction = "horizontal",
+        panel.border     = element_rect(fill = NA, color = ln_col, size = ln_pt)
+      )
+  })
+
+# Create final figure
+append(list(grp_umap), gene_umaps) %>%
+  plot_grid(
+    plotlist = .,
+    align    = "h",
+    axis     = "tb",
+    ncol     = 2
+  )
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

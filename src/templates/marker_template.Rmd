@@ -1,0 +1,64 @@
+
+```{r}
+
+so_in    <- {{so_in}}
+clmn     <- "{{clmn}}"
+box_cols <- {{box_cols}}
+prefix   <- "{{prefix}}"
+
+if (prefix == "") {
+  prefix <- NULL
+}
+
+```
+
+### Infection vs mock cell types {.tabset .tabset-pills}
+
+Differentially expressed genes were identified for each cell type by comparing replicates from the mock- and CHIKV-infected groups. The top upregulated genes in the `r chikv_infctd` group are shown below. GO terms for marker genes are shown at the bottom. This analysis was only performed for cell types that were identified in all samples.
+
+```{r "{{so_in}} {{clmn}} CHIKV vs mock", fig.width = 11, fig.height = 11, results = "asis"}
+
+# Input data
+Idents(so_in) <- so_in %>%
+  FetchData("treatment")
+
+# Cell types to test
+types <- so_in@meta.data %>%
+  group_by(!!sym(clmn), sample) %>%
+  summarize(n = n(), .groups = "drop") %>%
+  filter(n > 3) %>%          # need at least 3 cells per sample
+  group_by(!!sym(clmn)) %>%
+  filter(all(sam_lvls %in% sample)) %>%
+  pull(clmn) %>%
+  unique()
+
+# Create figure panels
+for (tp in types) {
+  cat("\n#### ", tp, "\n", sep = "")
+
+  prfx <- str_c(c(prefix, tp), collapse = "_")
+  prfx <- str_replace_all(prfx, " ", "_")
+  prfx <- str_remove_all(prfx, "[\\)\\(]")
+
+  marker_fig <- so_in %>%
+    subset(subset = !!sym(clmn) == tp) %>%
+  
+    create_marker_fig(
+      ident_1     = chikv_infctd,
+      grp_var     = "rep",
+      min_fc      = 0.25,
+      pval        = 0.05,
+      only_pos    = TRUE,
+      box_x       = "sample",
+      box_cols    = sam_cols,
+      overwrite   = params$overwrite,
+      file_dir    = table_dir,
+      file_prefix = prfx
+    )
+  
+  cat(N_MARKERS, "marker genes and", N_GO_TERMS, "GO terms were identified.")
+  print(marker_fig)
+  cat("\n\n---\n\n<br>\n\n<br>\n\n")
+}
+
+```
