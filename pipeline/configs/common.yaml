@@ -1,0 +1,15 @@
+# ==== Config file containing common parameters ====================
+
+# Path to the Cell Ranger genome reference.
+GENOME:
+    "/beevol/home/rbilab/ref/cellranger/mouse/mm10-CHIKV/CHIKV_AF15561"
+
+# Maximum number of jobs per sample that can be submitted by Cell Ranger
+# at a time.
+MAX_JOBS:
+    100
+
+# Path to an LSF template, this is optional.
+LSF_TEMPLATE:
+    "pipeline/lsf.template" 
+

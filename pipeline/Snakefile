@@ -11,18 +11,25 @@ import os
 import re
 
 
-# Parameters from config.yaml
+# Pull parameters from config.yaml
+def _pull_config(value):
+    if value in config:
+        return(config[value])
+    else:
+        return(None)
+
 RAW_DATA     = config["RAW_DATA"]
 RESULTS      = config["RESULTS"]
-RNA_SAMPLES  = config["RNA_SAMPLES"]
-GENOME       = config["GENOME"]
-ADT_SAMPLES  = config["ADT_SAMPLES"]
-ADT_REF      = config["ADT_REF"]
-ANTIBODIES   = config["ANTIBODIES"]
-VDJ_SAMPLES  = config["VDJ_SAMPLES"]
-VDJ_REF      = config["VDJ_REF"]
 MAX_JOBS     = config["MAX_JOBS"]
-LSF_TEMPLATE = config["LSF_TEMPLATE"]
+
+RNA_SAMPLES  = _pull_config("RNA_SAMPLES")
+GENOME       = _pull_config("GENOME")
+ADT_SAMPLES  = _pull_config("ADT_SAMPLES")
+ADT_REF      = _pull_config("ADT_REF")
+ANTIBODIES   = _pull_config("ANTIBODIES")
+VDJ_SAMPLES  = _pull_config("VDJ_SAMPLES")
+VDJ_REF      = _pull_config("VDJ_REF")
+LSF_TEMPLATE = _pull_config("LSF_TEMPLATE")
 
 CHEM = "auto"
 
@@ -95,7 +102,7 @@ rule all:
 
         RESULTS + "/count_metrics.csv"
 
-include: "src/rules/cellranger.snake"
+include: "rules/cellranger.snake"
 
 
 

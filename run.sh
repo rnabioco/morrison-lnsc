@@ -11,7 +11,8 @@ set -o nounset -o pipefail -o errexit -x
 mkdir -p logs
 
 run_snakemake() {
-    local config_file=$1
+    local config=$1
+    local common=pipeline/configs/common.yaml
     
     drmaa_args='
         -o {log.out}
@@ -25,8 +26,11 @@ run_snakemake() {
         --drmaa "$drmaa_args" \
         --jobs 300 \
         --latency-wait 60 \
-        --configfile $config_file
+        --configfile $common $config
 }
 
-run_snakemake pipeline/config.yaml
+run_snakemake pipeline/configs/8hpi.yaml
+run_snakemake pipeline/configs/8hpi-enrichment.yaml
+run_snakemake pipeline/configs/24hpi.yaml
+run_snakemake pipeline/configs/24hpi-enrichment.yaml
 

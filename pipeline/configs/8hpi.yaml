@@ -1,0 +1,21 @@
+# ==== Config file for running the 10x Cell Ranger pipeline ====================
+
+# Path to the fastq directory, multiple directories can be given.
+RAW_DATA:
+    - "data/210416_A00405_0383_AHY2N3DSXY"
+
+# Path to the output directory.
+RESULTS:
+    "results/8hpi"
+
+# Sample names for gene expression fastqs. If the same libraries were
+# sequenced multiple times, just include all the fastq directories in the
+# RAW_DATA list and make sure the fastqs from all runs begin with the
+# sample name. If gene expression fastqs are not being processed, leave
+# this blank.
+RNA_SAMPLES:
+    - "M1"
+    - "M2"
+    - "AF1"
+    - "AF2"
+
