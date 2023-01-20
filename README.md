@@ -1,2 +1,4 @@
-# scRNA-seq analysis template
-scRNA-seq analysis template
+## Morrison LNSC
+
+Integrated analysis of CHIKV LNSC scRNA-seq datasets
+
