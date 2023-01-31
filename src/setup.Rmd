@@ -18,22 +18,780 @@ library(Seurat)
 library(clustifyr)
 library(clustifyrdata)
 library(DoubletFinder)
+library(M3Drop)
 library(presto)
 library(gprofiler2)
 library(djvdj)
+library(qs)
 
 source(here(params$template_dir, "funs.R"))
 ```
 
-```{r "params"}
+```{r "samples"}
+# Set directories
+proj      <- basename(here())
+res_dir   <- here(params$res_dir)
+table_dir <- here(res_dir, params$table_dir)
 
-# Default chunk options
-opts_chunk$set(
-  message = FALSE,
-  warning = FALSE,
-  echo    = FALSE
+so_dir <- file.path(
+  "~/Dropbox/Ryan/Projects", proj,
+  params$res_dir, params$so_dir
 )
 
+# Identify samples based on directories in params$res_dir
+.list_dirs <- function(dir, recursive = FALSE, include_names = TRUE, ...) {
+  res <- list.dirs(here(dir), recursive = recursive, ...)
+  
+  if (include_names) names(res) <- basename(res)
+  
+  res
+}
+
+samples <- .list_dirs(res_dir) %>%
+  map(~ {
+    .x %>%
+      .list_dirs() %>%
+      map_chr(~ file.path(.x, "outs/filtered_feature_bc_matrix"))
+  })
+
+# Separate enriched libraries
+enrich_pat <- "-enrichment$"
+
+enriched <- samples[grepl(enrich_pat, names(samples))]
+samples  <- samples[!names(samples) %in% names(enriched)]
+
+names(enriched) <- names(enriched) %>%
+  str_remove(enrich_pat)
+```
+
+```{r "params"}
+# Should objects be created
+# objects to check for
+load_objs <- c(
+  "so",
+  "so_lec",
+  "so_fib",
+  "so_enr"
+)
+
+files_in <- load_objs %>%
+  str_c(".rds") %>%
+  here(so_dir, .)
+
+create_so <- files_in %>%
+  map_lgl(~ !file.exists(here(.x))) %>%
+  any()
+
+# Clustering parameters
+rslns <- c(3, 5, 7)
+
+type_clsts <- set_clst_names(rslns)
+
+type_clst_clmn <- type_clsts %>%
+  pluck(as.character(params$type_res), "clst")
+
+lec_rslns <- 1:10
+
+lec_clsts <- lec_rslns %>%
+  set_clst_names("lec_")
+
+lec_clst_clmn <- lec_clsts %>%
+  pluck(as.character(params$lec_res), "clst")
+
+fib_clsts <- rslns %>%
+  set_clst_names("fib_")
+
+fib_clst_clmn <- fib_clsts %>%
+  pluck(as.character(params$fib_res), "clst")
+
+# Cell types to use for identifying subsets
+lec_cell_types <- "Endothelial cells"
+fib_cell_types <- c("Fibroblasts", "Stromal cells (DN)")
+
+# CHIKV group labels
+chikv_grps <- c("CHIKV-low", "CHIKV-high")
+```
+
+```{r "references"}
+# LEC reference
+ref_lec <- ref_immgen[, grepl("^Endothelial cells", colnames(ref_immgen))]
+ref_lec <- ref_lec[rownames(ref_lec) %in% rownames(ref_LEC_xiang), ]
+
+colnames(ref_lec) <- colnames(ref_lec) %>%
+  str_replace("Endothelial cells \\(BEC\\)", "BEC")
+
+ref_LEC_xiang <- ref_LEC_xiang[rownames(ref_lec), ]
+
+if (!identical(rownames(ref_LEC_xiang), rownames(ref_lec))) {
+  stop("LEC reference rownames do not match.")
+}
+
+ref_lec <- cbind(ref_LEC_xiang, ref_lec)
+ref_lec <- ref_lec[, !grepl("^Endothelial cells", colnames(ref_lec))]
+
+# Fibroblast/stromal cell reference
+ref_fib <- ref_immgen[, grepl("^Fibroblast", colnames(ref_immgen))]
+ref_fib <- ref_fib[rownames(ref_fib) %in% rownames(ref_lymphnodestromal), ]
+
+ref_lymphnodestromal <- ref_lymphnodestromal[rownames(ref_fib), ]
+
+if (!identical(rownames(ref_lymphnodestromal), rownames(ref_fib))) {
+  stop("Fibroblast/stromal reference rownames do not match.")
+}
+
+ref_fib <- cbind(ref_lymphnodestromal, ref_fib)
+```
+
+```{r "create objects", include = FALSE, eval = create_so}
+# Create Seurat object
+sobjs <- samples %>%
+  map(~ imap(.x, ~ create_virus_obj(
+    mat_dir     = .x,
+    proj_name   = .y,
+    gene_min    = params$gene_min,
+    gene_max    = params$gene_max,
+    mito_max    = params$mito_max,
+    virus_str   = "^CHIKV",
+    virus_assay = "CHIKV"
+  )))
+
+# Estimate cell doublets
+# run this separately for each capture since each has a different number of
+# cells and thus a different doublet rate
+sobjs <- sobjs %>%
+  map(~ map(.x, run_doubletFinder, rsln = 2))
+
+# Format sample/replicate names
+sobjs <- sobjs %>%
+  imap(~ {
+    tm <- .y
+    
+    map(.x, ~ {
+      .x %>%
+        mutate_meta(
+          mutate,
+          treatment = str_extract(orig.ident, "^[A-Z]+"),
+          treatment = as.character(params$treatments[treatment]),
+          rep       = str_extract(orig.ident, "[0-9]+$"),
+          tm        = tm,
+          sample    = str_c(treatment, tm, rep, sep = "-")
+        )
+    })
+  })
+
+# Adjust qc_class
+# Cell calls from cellranger do not look as accurate for 8hpi AF2
+# remove cells with <= 800 UMIs
+sobjs <- sobjs %>%
+  map(~ map(
+    .x,
+    mutate_meta,
+    mutate,
+    qc_class = case_when(
+      dbl_class == "Doublet" ~ "doublet",
+      tm == "8hpi" & orig.ident == "AF2" & nCount_RNA <= 800 ~ "low_counts",
+      TRUE ~ qc_class
+    )
+  ))
+```
+
+```{r "identify CHIKV-high cells", eval = create_so}
+# Identify CHIKV-high cells
+clst_params <- list(
+  objs      = sobjs,
+  count_lim = c(5, 0),
+  method    = list("km", NULL)
+)
+
+sobjs <- clst_params %>%
+  pmap(~ {
+    args <- list(...)
+    
+    args$objs %>%
+      map(
+        classify_chikv,
+        count_clmn = "nCount_CHIKV",
+        count_lim  = args$count_lim,
+        method     = args$method
+      )
+  })
+
+# Calculate CHIKV stats
+# Ignore low_gene_count and high_mito_reads for CHIKV-high cells
+chikv_qc_stats <- c("low_gene_count", "high_mito_reads")
+
+sobjs <- sobjs %>%
+  map(~ imap(.x, ~ {
+    .x %>%
+      mutate_meta(
+        mutate,
+        pct_CHIKV = nCount_CHIKV / (nCount_RNA + nCount_CHIKV),
+        sgRNA_fc  = (CHIKV_AF15561_sgRNA + 1) / (CHIKV_AF15561_5 + 1),
+        neg_fc    = (CHIKV_AF15561_neg + 1) / (CHIKV_AF15561_5 + 1),
+        
+        qc_class = if_else(
+          qc_class %in% chikv_qc_stats & chikv_grp == chikv_grps[2],
+          "pass",
+          qc_class
+        )
+      )
+  }))
+```
+
+```{r "merge objects", eval = create_so}
+# Normalize objects
+sobjs <- sobjs %>%
+  map(~ map(.x, ~ {
+    .x %>%
+      norm_sobj(
+        cc_scoring = TRUE,
+        rna_method = "LogNormalize",
+        scale_data = FALSE
+      )
+  }))
+
+# Save unfiltered objects
+sobjs %>%
+  qsave(file.path(so_dir, "sobjs_raw.qs"))
+
+# Filter and merge objects
+# merge each timepoint separately
+sobjs <- sobjs %>%
+  map(~ map(.x, subset, qc_class == "pass"))
+
+sobjs <- sobjs %>%
+  map(~ merge(.x[[1]], .x[-1]))
+
+sobjs <- sobjs %>%
+  map(~ {
+    .x %>%
+      run_m3drop(threshold = 0.001) %>%
+      ScaleData(
+        assay           = "RNA",
+        vars.to.regress = "nCount_RNA"
+      ) %>%
+      cluster_RNA(
+        resolution = c(1, 3, 5, 7),
+        dims       = 1:40
+      )
+  })
+
+# Merge timepoints together
+# delete raw objects asap to free up memory
+so <- merge(sobjs[[1]], sobjs[-1])
+
+sobjs %>%
+  qsave(file.path(so_dir, "sobjs.qs"))
+
+rm(sobjs)
+```
+
+```{r "clustify types", eval = create_so}
+# Cluster cells
+so <- so %>%
+  run_m3drop(threshold = 0.001) %>%
+  ScaleData(
+    assay           = "RNA",
+    vars.to.regress = "nCount_RNA"
+  ) %>%
+  cluster_RNA(
+    resolution = rslns,
+    dims       = 1:40
+  )
+
+# B and T cell markers
+b_genes <- list("B cells" = "Cd19")
+t_genes <- list("T cells" = "Cd3e")
+
+# Classify broad cell types
+# Manually classified B cells and T cells
+threshold <- 0.5
+
+type_clsts %>%
+  iwalk(~ {
+    so <<- so %>%
+      mutate_meta(select, -UMAP_1, -UMAP_2) %>%
+      clustify(
+        ref_mat       = ref_immgen,
+        cluster_col   = .x$clst,
+        threshold     = threshold,
+        rename_prefix = .x$type
+      ) %>%
+      classify_mod_score(            # B cells
+        feats    = b_genes,
+        prefix   = str_c("b_", .y),
+        cutoff   = 0.2,
+        clst_col = .x$clst,
+        type_col = str_c(.x$type, "_type")
+      ) %>%
+      classify_mod_score(            # T cells
+        feats    = t_genes,
+        prefix   = str_c("t_", .y),
+        cutoff   = 0.5,
+        clst_col = .x$clst,
+        type_col = str_c(.x$type, "_type")
+      )
+  })
+
+# Set broad cell types
+type_clmn <- as.character(params$type_res)
+type_clmn <- type_clsts[[type_clmn]]$type
+type_clmn <- str_c(type_clmn, "_type")
+
+so <- so %>%
+  mutate_meta(
+    mutate,
+    cell_type = str_remove(!!sym(type_clmn), " \\(.+$"),
+    cell_type = recode(cell_type, "Stromal cells" = str_c(cell_type, " (DN)")),
+    
+    cell_type_clst = if_else(
+      cell_type == "unassigned",
+      str_c(cell_type, "-", !!sym(type_clst_clmn)),
+      cell_type
+    )
+  )
+```
+
+```{r "clustify LECs", eval = create_so}
+# Classify LEC cell types
+# ref_lec is Xiang et al. reference with BECs added
+# so_lec <- so %>%
+#   subset_sobj(
+#     subset       = cell_type %in% lec_cell_types,
+#     rsln         = rslns,
+#     dims         = 1:40,
+#     var_p        = 0.001
+#     # regress_vars = "nCount_RNA"
+#   )
+
+so_lec <- so %>%
+  subset(cell_type %in% lec_cell_types) %>%
+  FindVariableFeatures(selection.method = "vst", nfeature = 2000) %>%
+  ScaleData(vars.to.regress = "nCount_RNA") %>%
+  cluster_RNA(
+    resolution = lec_rslns,
+    dims       = 1:40
+  )
+
+so_lec <- so_lec %>%
+  mutate_meta(select, -starts_with("lec_"))
+
+lec_clsts %>%
+  iwalk(~ {
+    so_lec <<- so_lec %>%
+      mutate_meta(select, -UMAP_1, -UMAP_2) %>%
+      clustify(
+        ref_mat       = ref_lec,
+        cluster_col   = .x$clst,
+        rename_prefix = .x$type,
+        threshold     = 0.45,
+        n_genes       = 0
+      )
+  })
+
+# Set LEC cell types
+lec_clmn <- as.character(params$lec_res)
+lec_clmn <- lec_clsts[[lec_clmn]]$type
+lec_clmn <- str_c(lec_clmn, "_type")
+
+so_lec <- so_lec %>%
+  mutate_meta(
+    mutate,
+    lec_type = !!sym(lec_clmn),
+    
+    lec_type_clst = if_else(
+      lec_type == "unassigned",
+      str_c(lec_type, "-", !!sym(lec_clst_clmn)),
+      lec_type
+    )
+  )
+
+# # Add LEC subtypes back to original object
+# so <- so %>%
+#   AddMetaData(
+#     metadata = so_lec$lec_type,
+#     col.name = "lec_type"
+#   ) %>%
+#   mutate_meta(
+#     mutate,
+#     lec_subtype = replace_na(lec_type, "other"),
+#     lec_type    = recode(lec_type, "unassigned" = "unassigned-LEC"),
+#     lec_type    = if_else(lec_subtype == "other", cell_type, lec_type),
+#     subtype     = lec_type
+#   )
+
+# new <- so_lec_merge %>%
+#   clustify(
+#     ref_mat = ref_lec,
+#     cluster_col = "RNA_snn_res.4.2",
+#     n_genes = 0,
+#     threshold = 0.5
+#   )
+
+```
+
+```{r "integrate treatments", eval = create_so}
+# For LEC annotations, integrate treatments
+
+# Treatment groups
+treats <- so_lec$treatment %>%
+  unique() %>%
+  sort()
+
+chikv_infctd <- treats[1]
+
+# Variables to regress out
+vars_to_regress <- c("pct_mito", "nCount_RNA", "S.Score", "G2M.Score")
+
+# Clustering resolutions
+# int_rslns <- c(0.5, 1, 3, 5)
+int_rslns <- 1:10
+int_clsts <- set_clst_names(int_rslns, assay = "integrated")
+
+int_res       <- 3
+int_clmn      <- int_clsts[[as.character(int_res)]]
+int_clst_clmn <- int_clmn$clst
+int_clmn      <- str_c(int_clmn$type, "_type")
+
+# Cluster each treatment separately
+so_treats <- set_names(treats) %>%
+  map(~ {
+    so_lec %>%
+      subset_sobj(
+        treatment == .x,
+        dims         = 1:40,
+        rsln         = int_rslns,
+        regress_vars = vars_to_regress
+      )
+  })
+
+# Integration features
+features <- SelectIntegrationFeatures(object.list = so_treats)
+
+# Scale data using integration features
+so_int <- so_treats %>%
+  map(~ {
+    .x %>%
+      ScaleData(features = features) %>%
+      RunPCA(features = features)
+  })
+
+# Get integration anchors and integrate
+int_anchors <- so_int %>%
+  FindIntegrationAnchors(
+    anchor.features = features,
+    reduction = "rpca"
+  )
+
+so_int <- IntegrateData(
+  anchorset = int_anchors,
+  normalization.method = "LogNormalize"
+)
+
+rm(int_anchors)
+
+# Scale and cluster integrated data
+DefaultAssay(so_int) <- "integrated"
+
+so_int <- so_int %>%
+  ScaleData(vars.to.regress = vars_to_regress) %>%
+  RunPCA() %>%
+  RunUMAP(dims = 1:30, reduction.key = "intUMAP_") %>%
+  FindNeighbors(dims = 1:30) %>%
+  FindClusters(resolution = int_rslns)
+
+so_int <- so_int %>%
+  AddMetaData(FetchData(., str_c("intUMAP_", 1:2)))
+
+# DefaultAssay(so_int) <- "RNA"
+
+# Annotate LEC subsets
+so_int <- so_int %>%
+  mutate_meta(select, -starts_with("res_"))
+
+int_clsts %>%
+  iwalk(~ {
+    so_int <<- so_int %>%
+      mutate_meta(select, -intUMAP_1, -intUMAP_2) %>%
+      clustify(
+        ref_mat       = ref_lec,
+        cluster_col   = .x$clst,
+        rename_prefix = .x$type,
+        threshold     = 0.5,
+        n_genes = 0
+      )
+  })
+
+so_int %>%
+  qsave(file.path(so_dir, "so_int.qs"))
+
+# # PLOTS
+# so_int %>%
+#   plot_scatter(
+#     "res_5_type",
+#     "intUMAP_1", "intUMAP_2"
+#   ) +
+#   facet_wrap(tm ~ treatment, nrow = 1) +
+#   theme(aspect.ratio = 0.9)
+# 
+# so_int %>%
+#   mutate_meta(
+#     mutate,
+#     NEW = ifelse(res_5_type != "BEC", str_c(res_5_type, "-", integrated_snn_res.5), "BEC")
+#   ) %>%
+#   subset(res_5_type == "fLEC") %>%
+#   # plot_violin("nFeature_RNA", "NEW", method = "boxplot") +
+#   plot_scatter("NEW", "intUMAP_1", "intUMAP_2") +
+#   theme(aspect.ratio = 0.9) +
+#   facet_wrap(tm ~ treatment, nrow = 1)
+```
+
+```{r "integrated LEC annotations", eval = FALSE}
+# Do annotations change if BECs are removed and LECs are reclustered?
+# annotations appear similar
+
+# Remove BECs and re-cluster
+so_lec_int <- so_int %>%
+  subset(res_5_type != "BEC") %>%
+  ScaleData(vars.to.regress = vars_to_regress) %>%
+  RunPCA() %>%
+  RunUMAP(dims = 1:30, reduction.key = "intUMAP_") %>%
+  FindNeighbors(dims = 1:30) %>%
+  FindClusters(resolution = int_rslns)
+
+so_lec_int <- so_lec_int %>%
+  mutate_meta(select, -str_c("intUMAP_", 1:2)) %>%
+  AddMetaData(FetchData(., str_c("intUMAP_", 1:2)))
+
+x <- so_lec_int %>%
+  FindClusters(resolution = int_rslns)
+
+DefaultAssay(x) <- "RNA"
+
+x <- x %>%
+  mutate_meta(select, -starts_with("res_"))
+
+int_clsts %>%
+  iwalk(~ {
+    # so_lec_int <<- so_lec_int %>%
+    x <<- x %>%
+      mutate_meta(select, -str_c("intUMAP_", 1:2)) %>%
+      clustify(
+        ref_mat       = ref_lec,
+        cluster_col   = .x$clst,
+        rename_prefix = .x$type,
+        threshold     = 0.55
+      )
+  })
+
+# Create plots
+# int_rslns %>%
+#   str_c("res_", ., "_type") %>%
+#   map(~ {
+#     plot_scatter(
+#       input = x,
+#       data_col = .x,
+#       "intUMAP_1",
+#       "intUMAP_2"
+#     ) +
+#       facet_wrap(tm ~ treatment, nrow = 1) +
+#       theme(aspect.ratio = 0.9)
+#   })
+
+feat <- "Clu"
+feat <- "Madcam1"
+feat <- "Vcam1"
+feat <- "Marco"
+feat <- "res_5_type"
+feat <- "res_5_r"
+feat <- "nFeature_RNA"
+feat <- "chikv_grp"
+feat <- "integrated_snn_res.5"
+
+trns <- "identity"
+trns <- "log10"
+
+x %>%
+  plot_scatter(feat, "intUMAP_1", "intUMAP_2", trans = trns, size = 0.5) +
+  facet_wrap(tm ~ treatment, nrow = 1) +
+  theme(aspect.ratio = 0.9)
+
+x %>%
+  plot_violin(feat, "res_5_type", method = "boxplot") +
+  facet_wrap(tm ~ treatment, nrow = 1)
+
+# Correlation matrix
+mat <- x %>%
+  subset(treatment == "CHIKV") %>%
+  subset(tm == "24hpi") %>%
+  subset(chikv_grp == "CHIKV-high") %>%
+  clustify(
+    ref_mat = ref_lec,
+    cluster_col = "integrated_snn_res.5",
+    # cluster_col = "res_5_type",
+    seurat_out  = FALSE
+  )
+```
+
+```{r "add original chikv-high cells", eval = FALSE}
+# Want to see where the CHIKV-high cells originally identified for 24hpi data
+# 2021-01-08 fall on integrated projection
+# Original CHIKV-high cells generally align with new LEC subtype annotations
+# the unassigned-high group is divided between BECs, and potentially tzLECs
+
+old <- read_rds("~/Dropbox/Ryan/Projects/morrison-scRNA-seq/results/2021-01-08/sobjs/so.rds")
+
+old_chikv_high <- old %>%
+  FetchData(c("chikv_grp", "lec_subtype", "orig.ident")) %>%
+  filter(chikv_grp == "CHIKV-high") %>%
+  mutate(
+    chikv_grp = str_remove(chikv_grp, "^CHIKV-"),
+    chikv_grp = str_c(lec_subtype, "-", chikv_grp)
+  ) %>%
+  select(-lec_subtype, orig_chikv_grp = chikv_grp, orig.ident) %>%
+  mutate(strip_bc = str_remove(rownames(.), "_[0-9]+$"))
+
+new_dat <- so_int@meta.data %>%
+  filter(tm == "24hpi") %>%
+  select(orig.ident, treatment, rep) %>%
+  mutate(
+    orig.ident = str_c(treatment, "-", rep),
+    cell_bc = rownames(.),
+    strip_bc = str_remove(cell_bc, "_[0-9_]+$"),
+    .keep = "none"
+  )
+
+old_chikv_high <- old_chikv_high %>%
+  inner_join(new_dat, by = c("orig.ident", "strip_bc")) %>%
+  select(-c(orig.ident, strip_bc)) %>%
+  column_to_rownames("cell_bc")
+
+x <- so_int %>%
+  AddMetaData(old_chikv_high)
+
+x %>%
+  plot_scatter("orig_chikv_grp", "intUMAP_1", "intUMAP_2") +
+  facet_wrap(tm ~ treatment, nrow = 1) +
+  theme(aspect.ratio = 0.9)
+
+x %>%
+  plot_scatter("Marco", "intUMAP_1", "intUMAP_2") +
+  facet_wrap(tm ~ treatment, nrow = 1) +
+  theme(aspect.ratio = 0.9)
+```
+
+```{r "clustify using original 24hpi annotations", eval = FALSE}
+# Want to see how LEC subset annotations look when using a reference generated
+# from 2021-01-08 mock data
+# These annotations do not look very accurate
+
+# Create reference matrix
+x <- old %>%
+  subset(treatment == "mock") %>%
+  subset(cell_type %in% "Endothelial cells") %>%
+  subset(lec_subtype != "unassigned")
+
+typs <- x@meta.data %>%
+  group_by(lec_subtype) %>%
+  filter(n() > 200) %>%
+  pull(lec_subtype) %>%
+  unique()
+
+x <- x %>%
+  subset(lec_subtype %in% typs)
+
+meta <- x %>%
+  FetchData("lec_subtype")
+
+x <- x@assays$RNA@data
+
+ref_24hpi <- x %>%
+  average_clusters(
+    metadata = meta,
+    cluster_col = "lec_subtype"
+   )
+
+# Assign LEC subtypes
+x <- so_int
+
+DefaultAssay(x) <- "RNA"
+
+x <- x %>%
+  mutate_meta(select, -any_of("type")) %>%
+  clustify(
+    ref_mat = ref_24hpi,
+    cluster_col = "integrated_snn_res.5",
+    # cluster_col = "integrated_snn_res.10",
+    threshold = 0.5
+  )
+
+x %>%
+  plot_scatter("type", "intUMAP_1", "intUMAP_2") +
+  facet_wrap(tm ~ treatment, nrow = 1) +
+  theme(aspect.ratio = 0.9)
+```
+
+
+
+
+
+```{r "clustify fibroblasts", eval = create_so}
+# Classify non-endothelial stromal cell types
+# ref_fib is ref_lymphnodestromal with immgen fibroblast references added
+so_fib <- so %>%
+  subset_sobj(
+    subset       = cell_type %in% fib_cell_types,
+    rsln         = rslns,
+    dims         = 1:40,
+    cluster_data = TRUE,
+    regress_vars = "nCount_RNA"
+  )
+
+fib_clsts %>%
+  iwalk(~ {
+    so_fib <<- so_fib %>%
+      mutate_meta(select, -UMAP_1, -UMAP_2) %>%
+      clustify(
+        ref_mat       = ref_lymphnodestromal,
+        cluster_col   = .x$clst,
+        rename_prefix = .x$type,
+        threshold     = 0.65
+      )
+  })
+
+# Set fibroblast/stromal cell types
+fib_clmn <- as.character(params$fib_res)
+fib_clmn <- fib_clsts[[fib_clmn]]$type
+fib_clmn <- str_c(fib_clmn, "_type")
+
+so_fib <- so_fib %>%
+  mutate_meta(
+    mutate,
+    fib_type = !!sym(fib_clmn),
+    
+    fib_type_clst = if_else(
+      fib_type == "unassigned",
+      str_c(fib_type, "-", !!sym(fib_clst_clmn)),
+      fib_type
+    )
+  )
+
+# Add fibroblast/stromal subtypes back to original object
+x <- x %>%
+  AddMetaData(
+    metadata = so_fib$fib_type,
+    col.name = "fib_type"
+  ) %>%
+  mutate_meta(
+    mutate,
+    fib_subtype = replace_na(fib_type, "other"),
+    fib_type    = recode(lec_type, "unassigned" = "unassigned-fib"),
+    fib_type    = if_else(fib_subtype == "other", cell_type, fib_type),
+    subtype     = if_else(fib_subtype == "other", subtype, fib_type)
+  )
+```
+
+```{r "params"}
 # Set directories
 so_dir    <- here(params$enr_dir, params$so_dir)
 table_dir <- here(params$enr_dir, params$table_dir)
@@ -125,7 +883,7 @@ ref_fib <- cbind(ref_lymphnodestromal, ref_fib)
 
 ```
 
-```{r "create objects", include = FALSE, eval = create_so}
+```{r "OLD create objects", include = FALSE, eval = create_so}
 
 # Create Seurat object
 mats <- params$samples %>%
@@ -214,175 +972,6 @@ so_raw_df <- so_raw@meta.data %>%
 save_objs(so_raw)
 
 rm(sobjs, so_raw)
-
-```
-
-```{r "clustify types", eval = create_so}
-
-# B and T cell markers
-b_genes <- list("B cells" = "Cd19")
-t_genes <- list("T cells" = "Cd3e")
-
-# Classify broad cell types
-# Manually classified B cells and T cells
-type_clsts %>%
-  iwalk(~ {
-    so <<- so %>%
-      mutate_meta(select, -UMAP_1, -UMAP_2) %>%
-      clustify(
-        ref_mat       = ref_immgen,
-        cluster_col   = .x$clst,
-        rename_prefix = .x$type
-      ) %>%
-      classify_mod_score(            # B cells
-        feats    = b_genes,
-        prefix   = str_c("b_", .y),
-        cutoff   = 0.2,
-        clst_col = .x$clst,
-        type_col = str_c(.x$type, "_type")
-      ) %>%
-      classify_mod_score(            # T cells
-        feats    = t_genes,
-        prefix   = str_c("t_", .y),
-        cutoff   = 0.5,
-        clst_col = .x$clst,
-        type_col = str_c(.x$type, "_type")
-      )
-  })
-
-# Set broad cell types
-type_clmn <- as.character(params$type_res)
-type_clmn <- type_clsts[[type_clmn]]$type
-type_clmn <- str_c(type_clmn, "_type")
-
-so <- so %>%
-  mutate_meta(
-    mutate,
-    cell_type = str_remove(!!sym(type_clmn), " \\(.+$"),
-    cell_type = recode(cell_type, "Stromal cells" = str_c(cell_type, " (DN)")),
-    
-    cell_type_clst = if_else(
-      cell_type == "unassigned",
-      str_c(cell_type, "-", !!sym(type_clst_clmn)),
-      cell_type
-    )
-  )
-
-```
-
-```{r "clustify LECs", eval = create_so}
-
-# Classify LEC cell types
-# ref_lec is Xiang et al. reference with BECs added
-so_lec <- so %>%
-  subset_sobj(
-    subset       = cell_type %in% lec_cell_types,
-    rsln         = rslns,
-    dims         = 1:40,
-    cluster_data = TRUE,
-    regress_vars = "nCount_RNA"
-  )
-
-lec_clsts %>%
-  iwalk(~ {
-    so_lec <<- so_lec %>%
-      mutate_meta(select, -UMAP_1, -UMAP_2) %>%
-      clustify(
-        ref_mat       = ref_lec,
-        cluster_col   = .x$clst,
-        rename_prefix = .x$type,
-        threshold     = 0.5
-      )
-  })
-
-# Set LEC cell types
-lec_clmn <- as.character(params$lec_res)
-lec_clmn <- lec_clsts[[lec_clmn]]$type
-lec_clmn <- str_c(lec_clmn, "_type")
-
-so_lec <- so_lec %>%
-  mutate_meta(
-    mutate,
-    lec_type = !!sym(lec_clmn),
-    
-    lec_type_clst = if_else(
-      lec_type == "unassigned",
-      str_c(lec_type, "-", !!sym(lec_clst_clmn)),
-      lec_type
-    )
-  )
-
-# Add LEC subtypes back to original object
-so <- so %>%
-  AddMetaData(
-    metadata = so_lec$lec_type,
-    col.name = "lec_type"
-  ) %>%
-  mutate_meta(
-    mutate,
-    lec_subtype = replace_na(lec_type, "other"),
-    lec_type    = recode(lec_type, "unassigned" = "unassigned-LEC"),
-    lec_type    = if_else(lec_subtype == "other", cell_type, lec_type),
-    subtype     = lec_type
-  )
-
-```
-
-```{r "clustify fibroblasts", eval = create_so}
-
-# Classify non-endothelial stromal cell types
-# ref_fib is ref_lymphnodestromal with immgen fibroblast references added
-so_fib <- so %>%
-  subset_sobj(
-    subset       = cell_type %in% fib_cell_types,
-    rsln         = rslns,
-    dims         = 1:40,
-    cluster_data = TRUE,
-    regress_vars = "nCount_RNA"
-  )
-
-fib_clsts %>%
-  iwalk(~ {
-    so_fib <<- so_fib %>%
-      mutate_meta(select, -UMAP_1, -UMAP_2) %>%
-      clustify(
-        ref_mat       = ref_lymphnodestromal,
-        cluster_col   = .x$clst,
-        rename_prefix = .x$type,
-        threshold     = 0.65
-      )
-  })
-
-# Set fibroblast/stromal cell types
-fib_clmn <- as.character(params$fib_res)
-fib_clmn <- fib_clsts[[fib_clmn]]$type
-fib_clmn <- str_c(fib_clmn, "_type")
-
-so_fib <- so_fib %>%
-  mutate_meta(
-    mutate,
-    fib_type = !!sym(fib_clmn),
-    
-    fib_type_clst = if_else(
-      fib_type == "unassigned",
-      str_c(fib_type, "-", !!sym(fib_clst_clmn)),
-      fib_type
-    )
-  )
-
-# Add fibroblast/stromal subtypes back to original object
-so <- so %>%
-  AddMetaData(
-    metadata = so_fib$fib_type,
-    col.name = "fib_type"
-  ) %>%
-  mutate_meta(
-    mutate,
-    fib_subtype = replace_na(fib_type, "other"),
-    fib_type    = recode(lec_type, "unassigned" = "unassigned-fib"),
-    fib_type    = if_else(fib_subtype == "other", cell_type, fib_type),
-    subtype     = if_else(fib_subtype == "other", subtype, fib_type)
-  )
 
 ```
 

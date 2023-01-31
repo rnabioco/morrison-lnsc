@@ -11,65 +11,70 @@ output:
     highlight: kate
     
 params:
-  # res_dir:      "results/2021-04-16"  # Directory containing matrices
+  res_dir:      "results"             # Directory containing matrices
   template_dir: "src"                 # Directory containing Rmd templates
   table_dir:    "tables"              # Directory to write tables
   so_dir:       "sobjs"               # Directory to write Seurat objects
   metrics:      "count_metrics.csv"   # Cell Ranger metrics
-  so:           "so.rds"              # Seurat object for filtered cells
-  so_raw:       "so_raw.rds"          # Seurat object for unfiltered cells
-  so_lec:       "so_lec.rds"          # Seurat object for LECs
-  so_fib:       "so_fib.rds"          # Seurat object for fibroblasts
   
-  # so_infd:      "so_infd.rds"         # Seurat object for fibroblasts
-  # so_chikv:     "so_chikv.rds"        # Seurat object for CHIKV-high cells
-  
+  count_min:    0                     # Min number of total counts per cell  
   gene_min:     250                   # Min number of detected genes per cell
-  gene_max:     6000                  # Max number of detected genes per cell
+  gene_max:     9000                  # Max number of detected genes per cell
   mito_max:     20                    # Max percentage mito reads per cells
+  
   type_res:     5                     # Clustering resolution for annotating cell types
   lec_res:      5                     # Clustering resolution for annotating LECs
   fib_res:      5                     # Clustering resolution for annotating fibroblasts/stromal cells
   chikv_lim:    5                     # CHIKV read cutoff to include cell for CHIKV clustering
   
+  treatments:
+    value:
+      M:   "mock"
+      18M: "mock"
+      A:   "CHIKV"
+      AF:  "CHIKV"
+      21A: "CHIKV"
+
+
+  # so:           "so.rds"              # Seurat object for filtered cells
+  # so_raw:       "so_raw.rds"          # Seurat object for unfiltered cells
+  # so_lec:       "so_lec.rds"          # Seurat object for LECs
+  # so_fib:       "so_fib.rds"          # Seurat object for fibroblasts
   # tm:           "8hpi"                # Hours post infection
   #                                     # Other timepoints to merge
   # other_tms:
   #   value:
   #     24hpi: "results/2021-01-08" 
-      
-  samples:
-    value:
-      8hpi:
-        res_dir: "results/2021-04-16"
-        enr_dir: "results/2021-07-16"
-        samples:
-          mock-r1:  "M1"
-          mock-r2:  "M2"
-          CHIKV-r1: "AF1"
-          CHIKV-r2: "AF2"
-      24hpi:
-        res_dir: "results/2021-01-08"
-        samples:
-          mock-r1:  "M1"
-          mock-r2:  "M2"
-          mock-r3:  "M3"
-          CHIKV-r1: "A1"
-          CHIKV-r2: "A2"
-          CHIKV-r3: "A3"
+  # samples:
+  #   value:
+  #     8hpi:
+  #       res_dir: "results/2021-04-16"
+  #       enr_dir: "results/2021-07-16"
+  #       samples:
+  #         mock-r1:  "M1"
+  #         mock-r2:  "M2"
+  #         CHIKV-r1: "AF1"
+  #         CHIKV-r2: "AF2"
+  #     24hpi:
+  #       res_dir: "results/2021-01-08"
+  #       samples:
+  #         mock-r1:  "M1"
+  #         mock-r2:  "M2"
+  #         mock-r3:  "M3"
+  #         CHIKV-r1: "A1"
+  #         CHIKV-r2: "A2"
+  #         CHIKV-r3: "A3"
 ---
 
 <br>
 
 ```{r "chunk opts", echo = F}
-
 # Default chunk options
 knitr::opts_chunk$set(
   message = FALSE,
   warning = FALSE,
   echo    = FALSE
 )
-
 ```
 
 `r knitr::knit_child(here::here(params$res_dir, "setup.Rmd"))`

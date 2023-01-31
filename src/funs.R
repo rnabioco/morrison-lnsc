@@ -14,7 +14,7 @@ save_objs <- function(ob_in, prfx = NULL, ob_dir = so_dir) {
   }
   
   ob_in %>%
-    write_rds(here(ob_dir, str_c(prfx, ".rds")))
+    qs::qsave(here(ob_dir, str_c(prfx, ".qs")))
   
   ob_in@meta.data %>%
     as_tibble(rownames = "cell_id") %>%
@@ -282,12 +282,14 @@ create_sobj <- function(mat_dir, proj_name = "SeuratProject", hash_ids = NULL, a
 #' @return Seurat object
 #' @param mt_str String to use for identifying mitochondrial genes.
 #' @export
-create_virus_obj <- function(mat_dir, proj_name = "SeuratProject", gene_min = 250, gene_max = 5000,
-                             mito_max = 15, cells_min = 5, virus_min = Inf, virus_str = "^CHIKV",
-                             virus_assay = "CHIKV", mt_str = "^mt-") {
+create_virus_obj <- function(mat_dir, proj_name = "SeuratProject",
+                             count_min = 0, gene_min = 250, gene_max = 5000,
+                             mito_max = 15, cells_min = 5, virus_min = Inf,
+                             virus_str = "^CHIKV", virus_assay = "CHIKV",
+                             mt_str = "^mt-") {
   
   rna_assay <- "RNA"
-
+  
   # Load matrix
   mat <- Seurat::Read10X(mat_dir)
   
@@ -343,6 +345,7 @@ create_virus_obj <- function(mat_dir, proj_name = "SeuratProject", gene_min = 25
     djvdj::mutate_meta(
       mutate,
       qc_class = case_when(
+        nCount_RNA    < count_min ~ "low_counts",
         nFeature_RNA  > gene_max  ~ "high_gene_count",
         !!v_counts    > virus_min ~ "pass",
         pct_mito      > mito_max  ~ "high_mito_reads",
@@ -446,7 +449,7 @@ norm_sobj <- function(sobj_in, rna_assay = "RNA", adt_assay = "ADT", cc_scoring 
 #' @param ... Additional arguments to pass to doubletFinder_v3.
 #' @return Seurat object with doublet classifications add to meta.data
 #' @export
-run_doubletFinder <- function(sobj_in, assay = "RNA", dbl_rate = NULL, mito_max = 15, gene_min = 250,
+run_doubletFinder <- function(sobj_in, assay = "RNA", dbl_rate = NULL, mito_max = 20, gene_min = 300,
                               prep = TRUE, PCs = 1:40, pN = 0.25, reuse.pANN = FALSE, rsln = 1,
                               clust_column = "seurat_clusters", mito_clmn = "pct_mito", ...) {
   
@@ -521,6 +524,36 @@ run_doubletFinder <- function(sobj_in, assay = "RNA", dbl_rate = NULL, mito_max 
     AddMetaData(res, "dbl_class")
   
   res
+}
+
+#' Find variable features with M3Drop
+#' 
+#' @param sobj_in Seurat object
+#' @param threshold Threshold for identifying variable features
+#' @param assay Assay to pull counts from
+#' @param ... Additional arguments to pass to M3DropFeatureSelection
+#' @export
+run_m3drop <- function(sobj_in, threshold = 0.05, assay = "RNA", ...) {
+  
+  # counts cannot be log-normalized
+  genes <- sobj_in %>%
+    GetAssayData(
+      slot  = "counts",
+      assay = assay
+    ) %>%
+    M3DropConvertData(
+      is.log    = FALSE,
+      is.counts = TRUE
+    ) %>%
+    M3DropFeatureSelection(
+      mt_threshold  = threshold,
+      suppress.plot = TRUE,
+      ...
+    )
+  
+  VariableFeatures(sobj_in) <- rownames(genes)
+  
+  sobj_in
 }
 
 #' Run PCA and UMAP for gene expression data
@@ -984,6 +1017,55 @@ cluster_signal <- function(sobj_in, data_column, k = 2, grp_column = NULL, filt 
     djvdj::mutate_meta(mutate, !!sym(clust_column) := replace_na(!!sym(clust_column), "other"))
   
   res
+}
+
+classify_chikv <- function(sobj_in, count_clmn, count_lim = -Inf,
+                           grp_clmn = "chikv_grp",
+                           grps = c("CHIKV-low", "CHIKV-high"),
+                           log_trans = TRUE, method = "km") {
+  
+  sobj_in <- sobj_in %>%
+    mutate_meta(mutate, !!sym(grp_clmn) := grps[1])
+  
+  if (is.null(method)) {
+    sobj_in <- sobj_in %>%
+      mutate_meta(
+        mutate,
+        !!sym(grp_clmn) := if_else(
+          !!sym(count_clmn) > count_lim,
+          grps[2], grps[1]
+        )
+      )
+    
+  } else if (any(sobj_in[[count_clmn]] > count_lim)) {
+    res <- sobj_in %>%
+      mutate_meta(mutate, .counts = !!sym(count_clmn)) %>%
+      subset(.counts > count_lim)
+    
+    if (log_trans) {
+      res <- res %>%
+        mutate_meta(mutate, .counts = log10(.counts + 1))
+    }
+    
+    res <- res %>%
+      cluster_signal(
+        data_column  = ".counts",
+        clust_column = grp_clmn,
+        clust_names  = grps,
+        method       = method,
+        return_sobj  = FALSE
+      ) %>%
+      select(-.counts)
+    
+    sobj_in <- sobj_in %>%
+      AddMetaData(metadata = res) %>%
+      mutate_meta(
+        mutate,
+        !!sym(grp_clmn) := replace_na(!!sym(grp_clmn), grps[1])
+      )
+  }
+  
+  sobj_in
 }
 
 #' Classify cell type based on module score
