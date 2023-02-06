@@ -16,12 +16,10 @@ library(colorblindr)
 # analysis
 library(Seurat)
 library(clustifyr)
-library(clustifyrdata)
 library(DoubletFinder)
 library(M3Drop)
 library(presto)
 library(gprofiler2)
-library(djvdj)
 library(qs)
 
 source(here(params$template_dir, "funs.R"))
@@ -140,6 +138,331 @@ if (!identical(rownames(ref_lymphnodestromal), rownames(ref_fib))) {
 }
 
 ref_fib <- cbind(ref_lymphnodestromal, ref_fib)
+```
+
+```{r "24 OBJECTS", include = FALSE, eval = create_so}
+
+# Create Seurat object
+# We expect cells where the virus is replicating could have a high fraction of
+# mitochondrial reads
+sobjs <- samples$`24hpi` %>%
+  imap(~ create_virus_obj(
+    mat_dir     = .x,
+    proj_name   = .y,
+    gene_min    = 250,
+    gene_max    = 7500,
+    mito_max    = 20,
+    virus_str   = "^CHIKV",
+    virus_assay = "CHIKV"
+  ))
+
+# Estimate doublets
+sobjs <- sobjs %>%
+  map(~ {
+    .x %>%
+      run_doubletFinder(
+        dbl_rate = 0.1,
+        rsln     = 5
+      ) %>%
+      mutate_meta(
+        mutate,
+        qc_class = if_else(
+          dbl_class == "Doublet",
+          "doublet",
+          qc_class
+        )
+      ) %>%
+      mutate_meta(
+        select,
+        -starts_with("DF.classifications_"),
+        -starts_with("pANN_")
+      )
+  })
+
+# Identify CHIKV low/high cells
+sobjs <- sobjs %>%
+  map(~ {
+    res <- .x %>%
+      mutate_meta(mutate, chikv_grp = chikv_grps[1])
+    
+    if (any(.x$nCount_CHIKV > params$chikv_lim)) {
+      chikv_res <- res %>%
+        subset(nCount_CHIKV > params$chikv_lim) %>%
+        mutate_meta(mutate, nCount_CHIKV_log = log10(nCount_CHIKV + 1)) %>%
+        
+        cluster_signal(
+          data_column  = "nCount_CHIKV_log",
+          clust_column = "chikv_grp",
+          clust_names  = chikv_grps,
+          method       = "km",
+          return_sobj  = FALSE
+        ) %>%
+        select(-nCount_CHIKV_log)
+      
+      res <- res %>%
+        AddMetaData(metadata = chikv_res) %>%
+        mutate_meta(
+          mutate,
+          chikv_grp = replace_na(chikv_grp, chikv_grps[1])
+        )
+    }
+    
+    res
+  })
+
+# Calculate CHIKV stats
+# Ignore low_gene_count and high_mito_reads for CHIKV-high cells
+chikv_qc_stats <- c("low_gene_count", "high_mito_reads")
+
+ sobjs <- sobjs %>%
+  map(~ {
+    .x %>%
+      mutate_meta(
+        mutate,
+        pct_CHIKV = nCount_CHIKV / (nCount_RNA + nCount_CHIKV),
+        
+        CHIKV_sgRNA_fc = (CHIKV_AF15561_sgRNA + 1) / (CHIKV_AF15561_5 + 1),
+        
+        qc_class = if_else(
+          qc_class %in% chikv_qc_stats & chikv_grp == chikv_grps[2],
+          "pass",
+          qc_class
+        )
+      )
+  })
+
+# Format sample/replicate names
+sobjs <- sobjs %>%
+  map(~ {
+    .x %>%
+      mutate_meta(
+        mutate,
+        treatment  = str_extract(orig.ident, "^[A-Z]+"),
+        rep        = str_extract(orig.ident, "[0-9]+$"),
+        treatment  = as.character(params$treatments[treatment]),
+        orig.ident = str_c(treatment, "-", rep)
+      )
+  })
+
+# Filter, normalize, and merge objects
+so <- sobjs %>%
+  map(~ {
+    .x %>%
+      subset(subset = qc_class == "pass") %>%
+      norm_sobj(
+        cc_scoring = FALSE,
+        rna_method = "LogNormalize",
+        scale_data = FALSE
+      )
+  })
+
+so <- merge(so[[1]], so[-1])
+
+# Cluster cells
+so <- so %>%
+  FindVariableFeatures(
+    assay            = "RNA",
+    selection.method = "vst",
+    nfeatures        = 2000
+  ) %>%
+  ScaleData(assay = "RNA") %>%
+  cluster_RNA(
+    resolution = c(3.4, 4.2, 5),
+    dims       = 1:40
+  )
+
+# Save unfiltered objects and meta.data
+# Save and delete raw objects asap to free up memory
+# so_raw <- merge(sobjs[[1]], sobjs[2:length(sobjs)])
+# 
+# so_raw_df <- so_raw@meta.data %>%
+#   as_tibble(rownames = "cell_id")
+# 
+# write_rds(so_raw,    here(so_dir, "so_raw.rds"))
+# write_tsv(so_raw_df, here(so_dir, "so_raw.tsv.gz"))
+# 
+# rm(sobjs, so_raw)
+
+```
+
+```{r "24 TYPES", eval = create_so}
+
+# B and T cell markers
+b_genes   <- list("B cells" = "Cd19")
+t_genes   <- list("T cells" = "Cd3e")
+
+# Classify broad cell types
+# Manually classified B cells and T cells
+type_clsts %>%
+  iwalk(~ {
+    so <<- so %>%
+      mutate_meta(select, -UMAP_1, -UMAP_2) %>%
+      clustify(
+        ref_mat       = ref_immgen,
+        cluster_col   = .x$clst,
+        rename_prefix = .x$type
+      ) %>%
+      classify_mod_score(            # B cells
+        feats    = b_genes,
+        prefix   = str_c("b_", .y),
+        cutoff   = 0.2,
+        clst_col = .x$clst,
+        type_col = str_c(.x$type, "_type")
+      ) %>%
+      classify_mod_score(            # T cells
+        feats    = t_genes,
+        prefix   = str_c("t_", .y),
+        cutoff   = 0.5,
+        clst_col = .x$clst,
+        type_col = str_c(.x$type, "_type")
+      )
+  })
+
+# Set broad cell types
+type_clmn <- as.character(params$type_res)
+type_clmn <- type_clsts[[type_clmn]]$type
+type_clmn <- str_c(type_clmn, "_type")
+
+so <- so %>%
+  mutate_meta(
+    mutate,
+    cell_type = str_remove(!!sym(type_clmn), " \\(.+$"),
+    
+    cell_type_clst = if_else(
+      cell_type == "unassigned",
+      str_c(cell_type, "-", !!sym(type_clst_clmn)),
+      cell_type
+    )
+  )
+
+# TO REMOVE CELL TYPE COLUMNS
+# so <- so %>%
+#   mutate_meta(
+#     select,
+#     -starts_with("b_"),
+#     -starts_with("mac_"),
+#     -starts_with("t_")
+#   )
+# so <- so %>%
+#   mutate_meta(
+#     select,
+#     -starts_with("res_"),
+#     -ends_with("_score"),
+#     -c(cell_type, cell_type_clst)
+#   )
+
+```
+
+```{r "24 LECs", eval = create_so}
+
+# Classify LEC cell types
+# ref_lec is Xiang et al. reference with BECs added
+so_lec <- so %>%
+  subset_sobj(
+    subset       = cell_type %in% lec_cell_types,
+    rsln         = rslns,
+    dims         = 1:40,
+    cluster_data = TRUE
+  )
+
+lec_clsts %>%
+  iwalk(~ {
+    so_lec <<- so_lec %>%
+      mutate_meta(select, -UMAP_1, -UMAP_2) %>%
+      clustify(
+        ref_mat       = ref_lec,
+        cluster_col   = .x$clst,
+        rename_prefix = .x$type,
+        threshold     = 0.5
+      )
+  })
+
+# Set LEC cell types
+lec_clmn <- as.character(params$lec_res)
+lec_clmn <- lec_clsts[[lec_clmn]]$type
+lec_clmn <- str_c(lec_clmn, "_type")
+
+so_lec <- so_lec %>%
+  mutate_meta(
+    mutate,
+    lec_type = !!sym(lec_clmn),
+    
+    lec_type_clst = if_else(
+      lec_type == "unassigned",
+      str_c(lec_type, "-", !!sym(lec_clst_clmn)),
+      lec_type
+    )
+  )
+
+# Add LEC subtypes back to original object
+so <- so %>%
+  AddMetaData(
+    metadata = so_lec$lec_type,
+    col.name = "lec_type"
+  ) %>%
+  mutate_meta(
+    mutate,
+    lec_subtype = replace_na(lec_type, "other"),
+    lec_type    = if_else(lec_subtype == "other", cell_type, lec_type),
+    subtype     = lec_type
+  )
+
+```
+
+```{r "24 FIBROBLASTS", eval = create_so}
+
+# Classify non-endothelial stromal cell types
+# ref_fib is ref_lymphnodestromal with immgen fibroblast references added
+so_fib <- so %>%
+  subset_sobj(
+    subset       = cell_type %in% fib_cell_types,
+    rsln         = rslns,
+    dims         = 1:40,
+    cluster_data = TRUE
+  )
+
+fib_clsts %>%
+  iwalk(~ {
+    so_fib <<- so_fib %>%
+      mutate_meta(select, -UMAP_1, -UMAP_2) %>%
+      clustify(
+        ref_mat       = ref_fib,
+        cluster_col   = .x$clst,
+        rename_prefix = .x$type,
+        threshold     = 0.65
+      )
+  })
+
+# Set fibroblast/stromal cell types
+fib_clmn <- as.character(params$fib_res)
+fib_clmn <- fib_clsts[[fib_clmn]]$type
+fib_clmn <- str_c(fib_clmn, "_type")
+
+so_fib <- so_fib %>%
+  mutate_meta(
+    mutate,
+    fib_type = !!sym(fib_clmn),
+    
+    fib_type_clst = if_else(
+      fib_type == "unassigned",
+      str_c(fib_type, "-", !!sym(fib_clst_clmn)),
+      fib_type
+    )
+  )
+
+# Add fibroblast/stromal subtypes back to original object
+so <- so %>%
+  AddMetaData(
+    metadata = so_fib$fib_type,
+    col.name = "fib_type"
+  ) %>%
+  mutate_meta(
+    mutate,
+    fib_subtype = replace_na(fib_type, "other"),
+    fib_type    = if_else(fib_subtype == "other", cell_type, fib_type),
+    subtype     = if_else(fib_subtype == "other", subtype, fib_type)
+  )
+
 ```
 
 ```{r "create objects", include = FALSE, eval = create_so}

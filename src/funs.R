@@ -371,8 +371,9 @@ create_virus_obj <- function(mat_dir, proj_name = "SeuratProject",
 #' @param scale_data Scale data after normalization.
 #' @return Seurat object
 #' @export
-norm_sobj <- function(sobj_in, rna_assay = "RNA", adt_assay = "ADT", cc_scoring = FALSE,
-                      regress_vars = NULL, rna_method = "LogNormalize", adt_method = "CLR",
+norm_sobj <- function(sobj_in, rna_assay = "RNA", adt_assay = "ADT",
+                      cc_scoring = FALSE, regress_vars = NULL,
+                      rna_method = "LogNormalize", adt_method = "CLR",
                       scale_data = TRUE) {
   
   # Normalize counts
@@ -475,9 +476,9 @@ run_doubletFinder <- function(sobj_in, assay = "RNA", dbl_rate = NULL, mito_max 
   }
   
   # pK identification
-  sweep_res   <- paramSweep_v3(res, PCs = PCs)
-  sweep_stats <- summarizeSweep(sweep_res, GT = FALSE)
-  bcmvn       <- find.pK(sweep_stats)
+  sweep_res   <- DoubletFinder::paramSweep_v3(res, PCs = PCs)
+  sweep_stats <- DoubletFinder::summarizeSweep(sweep_res, GT = FALSE)
+  bcmvn       <- DoubletFinder::find.pK(sweep_stats)
   
   pK <- bcmvn %>%
     filter(BCmetric == max(BCmetric)) %>%
@@ -501,7 +502,7 @@ run_doubletFinder <- function(sobj_in, assay = "RNA", dbl_rate = NULL, mito_max 
   # homotypic doublet rate is estimated based on the distribution of cells
   # within cell clusters
   clsts       <- pull(res@meta.data, clust_column)
-  htypic_prop <- modelHomotypic(clsts)
+  htypic_prop <- DoubletFinder::modelHomotypic(clsts)
   nExp        <- round(dbl_rate * length(Cells(res)))
   nExp_adj    <- round(nExp * (1 - htypic_prop))
   
@@ -509,7 +510,7 @@ run_doubletFinder <- function(sobj_in, assay = "RNA", dbl_rate = NULL, mito_max 
   dbl_clmn <- str_c("DF.classifications", pN, pK, nExp_adj, sep = "_")
   
   res <- res %>%
-    doubletFinder_v3(
+    DoubletFinder::doubletFinder_v3(
       PCs        = PCs,
       pK         = pK,
       pN         = pN,
@@ -1287,6 +1288,7 @@ add_pvals <- function(gg_in, x, xend, y, p_val, prefix = "", format_p = TRUE,
       label         = p,
       parse         = prs,
       check_overlap = TRUE,
+      color         = "black",
       ...
     )
   
@@ -2102,11 +2104,11 @@ calc_p_vals <- function(sobj_in, sample_name = NULL, data_column, type_column) {
   # Add medians to data.frame
   res <- p_stats %>%
     rename(med_1 = med) %>%
-    right_join(res, by = c(cell_type = "group1"))
+    right_join(res, by = c(cell_type = "group1"), multiple = "all")
   
   res <- p_stats %>%
     select(cell_type, med_2 = med) %>%
-    right_join(res, by = c("cell_type" = "group2"))
+    right_join(res, by = c("cell_type" = "group2"), multiple = "all")
   
   # Format final table
   final_cols <- c(
