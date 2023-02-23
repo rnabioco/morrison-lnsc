@@ -7,7 +7,6 @@ output: html_document
 params:
   template_dir: "src"
   so_dir:       "~/Dropbox/Ryan/Projects/morrison-scRNA-seq/results"
-
 ---
 
 <br>
@@ -49,9 +48,13 @@ library(gprofiler2)
 library(qs)
 
 source(here(params$template_dir, "funs.R"))
+
+chikv_grps <- c("CHIKV-low", "CHIKV-high")
 ```
 
 ```{r "functions"}
+type_lab_fn <- function(x) str_replace(x, "_", " ")
+
 plot_example_gene <- function(so_in, feat, grp, box_colors = NULL,
                               umap_colors = c("#56B4E9", "white", "#D7301F")) {
   
@@ -129,9 +132,41 @@ so_24 <- read_rds(file.path(params$so_dir, "2021-01-08/sobjs/so.rds"))
 so_lec_8  <- read_rds(file.path(params$so_dir, "2021-07-16/sobjs/so_lec.rds"))
 so_lec_24 <- read_rds(file.path(params$so_dir, "2021-01-08/sobjs/so_lec.rds"))
 
-# Fix columns
-chikv_grps <- c("CHIKV-low", "CHIKV-high")
+# Adjust 24 hpi
+# Add PvCs to cell types
+# This is based on clustifyr results using ref_lymphnodestromal, and Pecam1,
+# Pdpn, Itga7, and Acta2 expression
+lec_cell_types <- "Endothelial cells"
+fib_cell_types <- c("Fibroblasts", "Stromal cells")
 
+so_24 <- so_24 %>%
+  mutate_meta(
+    mutate,
+    cell_type   = case_when(
+      fib_type == "PvC"             ~ fib_type,
+      cell_type %in% fib_cell_types ~ "FRC",
+      TRUE                          ~ cell_type
+    )
+  )
+
+so_24 <- so_24 %>%
+  mutate_meta(
+    mutate,
+    lec_type = case_when(
+      lec_subtype == "unassigned"   ~ "unassigned-LEC",
+      cell_type %in% lec_cell_types ~ lec_subtype,
+      TRUE                          ~ cell_type
+    )
+  )
+
+so_24 <- so_24 %>%
+  mutate_meta(
+    mutate,
+    chikv_type = if_else(chikv_grp == chikv_grps[2], lec_type, chikv_grp)
+  )
+
+# Adjust 8 hpi
+# Cluster 27 appears to be FRCs based on Pdpn, Pecam1, and Pdgfra
 so_8 <- so_8 %>%
   mutate_meta(
     mutate, 
@@ -143,6 +178,12 @@ so_8 <- so_8 %>%
       `Stromal cells (DN)` = "PvC"
     ),
     chikv_grp = ifelse(tot_nCount_CHIKV > 0, chikv_grps[2], chikv_grps[1])
+  )
+
+so_8 <- so_8 %>%
+  mutate_meta(
+    mutate,
+    lec_type = ifelse(RNA_snn_res.5 == "27", "FRC", lec_type)
   )
 
 # Merge objects
@@ -286,13 +327,35 @@ lec_type_cols["FRC"]            <- "#00375B"
 lec_type_cols["PvC"]            <- "#065D43"
 lec_type_cols["unassigned-LEC"] <- "#676767"
 
+
+lec_type_cols <- so_merge_df %>%
+  pull(lec_type) %>%
+  table() %>%
+  sort(decreasing = TRUE) %>%
+  names()
+
+lec_type_cols <- lec_type_cols[lec_type_cols != "unassigned"]
+
+lec_type_cols <- set_names(
+  ito_cols[seq_along(lec_type_cols)],
+  lec_type_cols
+)
+
+lec_type_cols["unassigned"] <- "grey70"
+
+old_cols <- lec_type_cols
+
+lec_type_cols["FRC"]   <- old_cols["Valve"]
+lec_type_cols["Valve"] <- old_cols["fLEC"]
+lec_type_cols["fLEC"]  <- old_cols["FRC"]
+
 # CHIKV clusters colors
 grp_cols <- set_names(
   c("#56B4E9", "#0072B2"),
   chikv_grps
 )
 
-n_reps <- 3
+n_reps <- n_distinct(so_merge_df$rep)
 
 grp_rep_cols <- grp_cols %>% 
   imap(~ set_names(
@@ -313,8 +376,11 @@ dat <- so_8@meta.data %>%
   arrange(tot_pct_CHIKV)
 
 # Create UMAP
+pseudo <- dat$tot_pct_CHIKV
+pseudo <- min(pseudo[pseudo > 0]) / 2
+
 A <- dat %>%
-  ggplot(aes(UMAP_1, UMAP_2, fill = tot_pct_CHIKV + 0.0001)) +
+  ggplot(aes(UMAP_1, UMAP_2, fill = tot_pct_CHIKV + pseudo)) +
   geom_point_trace(
     color = "grey",
     trace_position = "bottom"
@@ -334,19 +400,21 @@ A <- dat %>%
   )
 ```
 
-```{r "fig 1B", fig.width = 10, fig.height = 10}
+```{r "fig 1C", fig.width = 10, fig.height = 10}
 # Format plot data
 dat <- so_8@meta.data %>%
   filter(chikv_grp == chikv_grps[2])
 
 plt_labs <- get_nlab_fun(dat, "lec_type", l = "\n", r = "")
+plt_labs <- plt_labs()
+plt_labs <- map_chr(plt_labs, type_lab_fn)
 
 dat <- dat %>%
-  mutate(lec_type = fct_relevel(lec_type, names(plt_labs())))
+  mutate(lec_type = fct_relevel(lec_type, names(plt_labs)))
 
 # Create UMAP
-B <- so_8@meta.data %>%
-  mutate(lec_type = fct_relevel(lec_type, names(plt_labs()))) %>%
+C <- so_8@meta.data %>%
+  mutate(lec_type = fct_relevel(lec_type, names(plt_labs))) %>%
   ggplot(aes(UMAP_1, UMAP_2)) +
   geom_point_trace(
     color = "grey",
@@ -355,6 +423,7 @@ B <- so_8@meta.data %>%
   ) +
   geom_point(aes(color = lec_type), data = dat) +
   scale_color_manual(values = lec_type_cols, labels = plt_labs) +
+  scale_y_discrete(labels = type_lab_fn) +
   guides(color = guide_legend(override.aes = list(size = 4))) +
   labs(title = "CHIKV-high cell types") +
   umap_theme +
@@ -367,8 +436,9 @@ B <- so_8@meta.data %>%
   )
 ```
 
-```{r "fig 1C", fig.width = 3, fig.height = 6}
+```{r "fig 1B", fig.width = 3, fig.height = 6}
 # Format plot data
+# ONLY PLOTTING ENRICHED COUNTS
 dat <- so_8@meta.data %>%
   filter(treatment == "CHIKV") %>%
   group_by(lec_type) %>%
@@ -376,6 +446,7 @@ dat <- so_8@meta.data %>%
   ungroup() %>%
   mutate(
     counts = tot_nCount_CHIKV - nCount_CHIKV
+    # counts = tot_nCount_CHIKV
     # enr = tot_nCount_CHIKV + 1
   )
 
@@ -394,19 +465,21 @@ lvls <- dat %>%
   pull(lec_type)
 
 plt_labs <- get_nlab_fun(dat, "lec_type", l = "\n", r = "")
+plt_labs <- plt_labs()
+plt_labs <- map_chr(plt_labs, type_lab_fn)
 
 # Create boxplots
-C <- dat %>%
+B <- dat %>%
   mutate(lec_type = fct_relevel(lec_type, lvls)) %>%
   ggplot(
     aes(counts + 1, lec_type, fill = lec_type, color = lec_type, alpha = rep)
   ) +
   geom_boxplot(size = 1, outlier.size = 1.5, outlier.alpha = 1) +
   scale_x_log10() +
-  scale_y_discrete(labels = plt_labs()) +
+  scale_y_discrete(labels = plt_labs)+
   scale_fill_manual(values = lec_type_cols) +
   scale_color_manual(values = lec_type_cols) +
-  scale_alpha_manual(values = c(0.25, 0.75)) +
+  scale_alpha_manual(values = c(0.5, 0.5)) +
   labs(x = "CHIKV counts + 1") +
   base_theme +
   theme(
@@ -488,16 +561,16 @@ comps %>%
 
 ```{r "fig 1", fig.width = 15, fig.height = 20}
 l <- plot_grid(
-  A, B,
-  labels = c("A", "B"), label_size = ttl_pt2 * 1.5,
+  A, C,
+  labels = c("A", "C"), label_size = ttl_pt2 * 1.5,
   ncol   = 1,
   align  = "v",
   axis   = "rl"
 )
 
 r <- plot_grid(
-  C, D,
-  labels = c("C", "D"), label_size = ttl_pt2 * 1.5,
+  B, D,
+  labels = c("B", "D"), label_size = ttl_pt2 * 1.5,
   ncol   = 1,
   align  = "v",
   axis   = "rl"
@@ -508,16 +581,209 @@ plot_grid(l, r, nrow = 1, rel_widths = c(1, 0.5))
 
 <br>
 
-## Figure S?
+## Figure S1
 
-Cell type markers
+CHIKV may target MARCO-expressing LECs for infection
 
-```{r "cell type markers", fig.height = 21, fig.width = 20}
+```{r "fig S1A", fig.width = 10, fig.height = 10}
+# Pseudo count for pct_mito
+pseudo <- so_24$pct_mito
+pseudo <- min(pseudo[pseudo > 0]) / 2
+
+# Format data
+dat <- so_24@meta.data %>%
+  as_tibble(rownames = "cell_id") %>%
+  mutate(pct_mito = pct_mito + pseudo) %>%
+  arrange(CHIKV_sgRNA_fc)
+
+# sgRNA ratio UMAP
+A <- dat %>%
+  ggplot(aes(UMAP_1, UMAP_2, fill = CHIKV_sgRNA_fc)) +
+  geom_point_trace(
+    color = "grey",
+    trace_position = "bottom",
+    size = 0.5
+  ) +
+  scale_fill_gradientn(colours = c("white", "#0072B2", "#002037"), labels = scales::label_number()) +
+  guides(fill = guide_colorbar(title.position = "top", ticks = FALSE, title = "CHIKV sgRNA ratio")) +
+  umap_theme +
+  theme(
+    aspect.ratio         = 0.9,
+    legend.position      = "top",
+    legend.title         = element_text(hjust = 0.5, size = ttl_pt2),
+    legend.direction     = "horizontal",
+    legend.justification = 0.5,
+    legend.key.width     = unit(30, "pt"),
+    legend.key.height    = unit(5, "pt")
+  )
+```
+
+```{r "fig S1B", fig.width = 10, fig.height = 7}
+# Scatter plots
+y_vars <- c(
+  "# mouse genes\nexpressed" = "nFeature_RNA",
+  "% mitochondrial\nreads" = "pct_mito"
+)
+
+typs <- c("Marco_LEC", "PvC", "BEC")
+
+dat <- dat %>%
+  filter(
+    chikv_grp == chikv_grps[2],
+    lec_type %in% typs
+  ) %>%
+  mutate(lec_type = fct_relevel(lec_type, typs)) %>%
+  dplyr::rename(!!!syms(y_vars)) %>%
+  pivot_longer(all_of(names(y_vars))) %>%
+  group_by(lec_type, name) %>%
+  mutate(
+    cor = cor(log10(CHIKV_sgRNA_fc), log10(value)),
+    cor = str_c("r = ", round(cor, 2))
+  ) %>%
+  ungroup()
+
+B <- dat %>%
+  split(.$lec_type) %>%
+  unname() %>%
+  imap(~ {
+    clmn <- .y
+    
+    .x <- .x %>%
+      split(.$name)
+    
+    top <- names(.x)[1]
+    
+    .x %>%
+      imap(~ {
+        if (clmn == 1) y_ttl <- .y
+        else           y_ttl <- NULL
+        
+        ttl <- NULL
+        sub <- NULL
+        x_ttl <- NULL
+        
+        if (.y == top) {
+          ttl   <- type_lab_fn(unique(.x$lec_type))
+          sub   <- str_c("n = ", nrow(.x))
+        } else if (clmn == 2) {
+          x_ttl <- "CHIKV sgRNA ratio"
+        }
+        
+        .x %>%
+          ggplot(aes(CHIKV_sgRNA_fc, value, color = lec_type)) +
+          geom_point() +
+          geom_smooth(
+            method = "lm", formula = y ~ x,
+            color = "black", linewidth = 0.5, linetype = 2, alpha = 0.2) +
+          geom_text(
+            aes(Inf, Inf, label = cor),
+            hjust = 1.2, vjust = 1.2,
+            color = "black",
+            check_overlap = TRUE
+          ) +
+          scale_color_manual(values = lec_type_cols) +
+          scale_x_log10() +
+          scale_y_log10(expand = expansion(c(0.05, 0.10))) +
+          labs(title = ttl, subtitle = sub, x = x_ttl, y = y_ttl) +
+          theme(aspect.ratio = 0.9) +
+          base_theme +
+          theme(legend.position = "none")
+      })
+  }) %>%
+  flatten() %>%
+  wrap_plots(byrow = FALSE, nrow = 2)
+```
+
+```{r "fig S1C", fig.width = 10, fig.height = 6.5}
+# Genes to plot
+gns <- c(
+  "Lyve1", "Marco",    # Marco LECs
+  "Madcam1", "Vcam1",  # fLECs
+  "Ptx3",              # Ptx3 LECs
+  "Ackr4"              # cLECs
+)
+
+# Format data
+dat <- list("8hpi" = so_8, "24hpi" = so_24) %>%
+  imap_dfr(~ {
+    .x %>%
+      FetchData(c("lec_type", "treatment", "rep", gns)) %>%
+      as_tibble(rownames = "cell_id") %>%
+      mutate(tm = .y)
+  }) %>%
+  mutate(tm = fct_relevel(tm, c("8hpi", "24hpi")))
+
+# Create boxplots
+C <- gns %>%
+  map(~ {
+    lvls <- dat %>%
+      group_by(lec_type) %>%
+      summarize(
+        stats = list(boxplot.stats(!!sym(.x))),
+        med   = map_dbl(stats, ~ .x$stats[3]),
+        q3    = map_dbl(stats, ~ .x$stats[4]),
+        q4    = map_dbl(stats, ~ .x$stats[5]),
+        mx    = max(!!sym(.x))
+      ) %>%
+      arrange(med, q3, q4, mx) %>%
+      pull(lec_type) %>%
+      rev()
+      
+    dat %>%
+      mutate(lec_type = fct_relevel(lec_type, lvls)) %>%
+      ggplot(aes(lec_type, !!sym(.x), color = lec_type, fill = lec_type)) +
+      geom_boxplot(
+        size = 0.5, alpha = 0.5,
+        outlier.size = 0.1, outlier.alpha = 1,
+        position = position_dodge2(preserve = "single")
+      ) +
+      scale_color_manual(values = lec_type_cols) +
+      scale_fill_manual(values = lec_type_cols) +
+      scale_x_discrete(labels = type_lab_fn) +
+      facet_wrap(~ tm, ncol = 1) +
+      labs(y = str_c(.x, " expression")) +
+      base_theme +
+      theme(
+        aspect.ratio    = 0.16,
+        legend.position = "none",
+        axis.title.x    = element_blank(),
+        axis.text.x     = element_text(angle = 45, hjust = 1),
+        axis.text.y     = element_text(size = txt_pt1)
+      )
+  }) %>%
+  plot_grid(
+    plotlist = .,
+    align = "vh",
+    axis  = "trbl",
+    nrow  = 2
+  )
+```
+
+```{r "fig S1", fig.width = 15, fig.height = 14}
+top <- plot_grid(
+  A, B,
+  labels = c("A", "B"), label_size = ttl_pt2 * 1.5,
+  align = "h", axis = "tb",
+  nrow = 1
+)
+
+plot_grid(
+  top, C,
+  labels = c("", "C"), label_size = ttl_pt2 * 1.5,
+  align = "v", axis = "rl",
+  ncol = 1
+)
+```
+
+
+```{r "cell type markers", fig.height = 21, fig.width = 20, eval = FALSE}
 feats <- c(
   "Ptprc",           # hematopoietic cells
   "Pdpn", "Pecam1",  # LECs (+/+), BECs (-/+), FRCs (+/-)
+  "Pdgfra",          # Fibroblasts
   "Acta2", "Itga7",  # PvCs
   "Cd14", "Fcgr3",   # macrophages/monocytes
+  "Fcgr1",           # macrophages
   "Nkg7",            # NK cells
   "Cd3e",            # T cells
   "Cd19"             # B cells
@@ -535,13 +801,7 @@ feats %>%
   plot_grid(plotlist = ., ncol = 4)
 ```
 
-<br>
-
-## Figure S?
-
-LEC type markers
-
-```{r "lec type markers", fig.height = 28, fig.width = 20}
+```{r "lec type markers", fig.height = 28, fig.width = 20, eval = FALSE}
 feats <- c(
   "Marco", "Lyve1", "Tspan7",        # Marco LECs
   "Madcam1", "Vcam1", "Clu", "Ltb",  # fLECs
@@ -565,17 +825,6 @@ feats %>%
 
 <br>
 
-## Figure S1
-
-CHIKV may target MARCO-expressing LECs for infection
-
-```{r}
-
-
-```
-
-<br>
-
 ## Figure 5
 
 Induction of dLN inflammatory gene expression occurs between 8 and 24 hpi with
@@ -585,9 +834,3 @@ LECs exhibiting a unique inflammatory expression profile
 
 
 ```
-
-
-
-
-
-
