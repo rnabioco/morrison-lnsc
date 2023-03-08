@@ -60,6 +60,10 @@ samples  <- samples[!names(samples) %in% names(enriched)]
 
 names(enriched) <- names(enriched) %>%
   str_remove(enrich_pat)
+
+# USE ORIGINAL CELLRANGER RUNS
+samples$`24hpi` <- samples$orig_24hpi
+
 ```
 
 ```{r "params"}
@@ -81,7 +85,8 @@ create_so <- files_in %>%
   any()
 
 # Clustering parameters
-rslns <- c(3, 5, 7)
+# rslns <- c(3, 5, 7)
+rslns <- c(3.4, 4.2, 5)
 
 type_clsts <- set_clst_names(rslns)
 
@@ -161,8 +166,8 @@ sobjs <- sobjs %>%
   map(~ {
     .x %>%
       run_doubletFinder(
-        dbl_rate = 0.1,
-        rsln     = 5
+        # dbl_rate = 0.1,
+        rsln = 5
       ) %>%
       mutate_meta(
         mutate,
@@ -214,7 +219,7 @@ sobjs <- sobjs %>%
 # Ignore low_gene_count and high_mito_reads for CHIKV-high cells
 chikv_qc_stats <- c("low_gene_count", "high_mito_reads")
 
- sobjs <- sobjs %>%
+sobjs <- sobjs %>%
   map(~ {
     .x %>%
       mutate_meta(
@@ -359,10 +364,9 @@ so <- so %>%
 # ref_lec is Xiang et al. reference with BECs added
 so_lec <- so %>%
   subset_sobj(
-    subset       = cell_type %in% lec_cell_types,
-    rsln         = rslns,
-    dims         = 1:40,
-    cluster_data = TRUE
+    subset = cell_type %in% lec_cell_types,
+    rsln   = lec_rslns,
+    dims   = 1:40
   )
 
 lec_clsts %>%
@@ -372,8 +376,8 @@ lec_clsts %>%
       clustify(
         ref_mat       = ref_lec,
         cluster_col   = .x$clst,
-        rename_prefix = .x$type,
-        threshold     = 0.5
+        rename_prefix = .x$type
+        # threshold     = 0.5
       )
   })
 
@@ -764,7 +768,8 @@ treats <- so_lec$treatment %>%
 chikv_infctd <- treats[1]
 
 # Variables to regress out
-vars_to_regress <- c("pct_mito", "nCount_RNA", "S.Score", "G2M.Score")
+# vars_to_regress <- c("pct_mito", "nCount_RNA", "S.Score", "G2M.Score")
+vars_to_regress <- c("pct_mito", "nCount_RNA")
 
 # Clustering resolutions
 # int_rslns <- c(0.5, 1, 3, 5)

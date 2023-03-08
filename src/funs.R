@@ -2139,6 +2139,34 @@ calc_p_vals <- function(sobj_in, sample_name = NULL, data_column, type_column) {
   res
 }
 
+
+#' Format p-value label
+format_pvalue <- function(p, digits = 1, sig_level = 0.05) {
+  
+  ns   <- p > sig_level
+  zero <- p == 0
+  
+  p <- scales::label_scientific(digits = digits)(p)
+  
+  nm <- str_extract(p, "[+\\-][0-9]+$")
+  
+  p <- str_remove(p, str_c("\\", nm, "$"))
+  
+  nm <- nm %>%
+    as.numeric() %>%
+    as.character() %>%
+    str_c("<sup>", ., "</sup>")
+  
+  p <- str_replace(p, "e", "x10")
+  p <- str_c(p, nm)
+  
+  p[ns]   <- "ns"
+  p[zero] <- "0"
+  
+  p
+}
+
+
 #' Create gene figure with UMAP and boxplot panels
 create_gene_fig <- function(df_in, grps, feat, feat_clrs = c("white", "#D7301F"), box_clrs,
                             size = 0.0001, stroke = 0.75) {
@@ -2213,6 +2241,96 @@ create_gene_fig <- function(df_in, grps, feat, feat_clrs = c("white", "#D7301F")
 
 # Marker figures ----
 
+#' Run CellChat
+run_cellchat <- function(so_in, group_col = "treatment",
+                         cell_col = "cell_type", prefix = "",
+                         include_cols = c(group_col, "sample", "rep", cell_col),
+                         pos_group = "CHIKV", use_pop_size = FALSE,
+                         db = c("Secreted Signaling", "Cell-Cell Contact"),
+                         object_dir = NULL) {
+  
+  # Check for saved objects
+  if (!is.null(object_dir)) {
+    obj_path <- file.path(object_dir, str_c(prefix, "cellchat.qs"))
+    
+    if (file.exists(obj_path)) return(qread(obj_path))
+  }
+  
+  # Split input object by treatment group
+  cc_objs <- so_in %>%
+    Seurat::SplitObject(group_col) %>%
+    map(~ {
+      data <- .x@assays$RNA@data
+      meta <- .x@meta.data %>%
+        dplyr::select(all_of(include_cols))
+      
+      list(data = data, meta = meta)
+    })
+  
+  # Create cellchat objects
+  cc_objs <- cc_objs %>%
+    map(~ {
+      createCellChat(
+        object   = .x$data,
+        meta     = .x$meta,
+        group.by = cell_col
+      )
+    })
+  
+  # Select database
+  CellChatDB     <- CellChatDB.mouse
+  CellChatDB.use <- subsetDB(CellChatDB, search = db)
+  
+  cc_objs <- cc_objs %>%
+    map(~ {
+      .x@DB <- CellChatDB.use
+      .x
+    })
+  
+  # Subset for signaling genes
+  cc_objs <- cc_objs %>%
+    map(subsetData)
+  
+  # Infer signaling network
+  cc_objs <- cc_objs %>%
+    map(~ {
+      .x %>%
+        identifyOverExpressedGenes() %>%
+        identifyOverExpressedInteractions() %>%
+        computeCommunProb(population.size = use_pop_size) %>%
+        filterCommunication(min.cells = 10) %>%
+        computeCommunProbPathway() %>%
+        aggregateNet() %>%
+        netAnalysis_computeCentrality()
+    })
+  
+  # Merge objects
+  cellchat <- cc_objs %>%
+    mergeCellChat(add.names = names(cc_objs))
+  
+  # Differentially expressed pathways
+  cellchat <- cellchat %>%
+    identifyOverExpressedGenes(
+      group.dataset = "datasets",
+      pos.dataset   = pos_group,
+      features.name = pos_group,
+      only.pos      = FALSE,
+      thresh.pc     = 0.1,
+      thresh.fc     = 0.1,
+      thresh.p      = 1
+    )
+  
+  # Save objects
+  res <- list(
+    cellchat = cellchat,
+    cc_objs  = cc_objs
+  )
+  
+  if (!is.null(object_dir)) qsave(res, obj_path)
+  
+  res
+}
+
 #' Run gprofiler
 #' 
 #' @param gene_list List of input genes.
@@ -2229,9 +2347,10 @@ create_gene_fig <- function(df_in, grps, feat, feat_clrs = c("white", "#D7301F")
 #' @param ... Additional arguments to pass to gprofiler2.
 #' @return tibble containing GO terms.
 #' @export
-run_gprofiler <- function(gene_list, genome = NULL, gmt_id = NULL, p_max = 0.05, GO_size = 10, intrsct_size = 10, 
-                          order_query = FALSE, dbases = c("GO:BP", "GO:MF", "KEGG"), file_path = NULL,
-                          overwrite = FALSE, ...) {
+run_gprofiler <- function(gene_list, genome = NULL, gmt_id = NULL, p_max = 0.05,
+                          GO_size = 10, intrsct_size = 10, order_query = FALSE,
+                          dbases = c("GO:BP", "GO:MF", "KEGG"),
+                          file_path = NULL, overwrite = FALSE, ...) {
   
   # Check for empty gene list
   if (is_empty(gene_list)) {
