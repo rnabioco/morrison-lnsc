@@ -978,10 +978,12 @@ clst_dat <- clst_dat %>%
   mutate(cluster = ifelse(shared, max(cluster[shared]), cluster))
 
 # Identify top clusters
-top_clsts <- clst_dat %>%
+up_types <- clst_dat %>%
   distinct(cluster, gene, up_types, n_types) %>%
   group_by(cluster, up_types, n_types) %>%
-  summarize(n = n_distinct(gene), .groups = "drop") %>%
+  summarize(n = n_distinct(gene), .groups = "drop")
+
+top_clsts <- up_types %>%
   group_by(cluster, n_types, n) %>%
   summarize(id = map_chr(up_types, str_c, collapse = "/"), .groups = "drop") %>%
   mutate(id = ifelse(n_types >= 5, "interferon response", id)) %>%
@@ -1003,15 +1005,60 @@ clsts <- clst_dat %>%
   distinct(gene, cluster) %>%
   filter(cluster %in% top_clsts$cluster)
 
-plt_dat <- mat %>%
+plt_dat <- marks %>%
+  filter(
+    gene %in% unique(sig_marks$gene),
+    cell_type %in% colnames(mat)
+  ) %>%
+  
+  dplyr::select(gene, cell_type, avg_log2FC) %>%
+  pivot_wider(
+    names_from  = cell_type,
+    values_from = avg_log2FC,
+    values_fill = 0
+  ) %>%
+  column_to_rownames("gene") %>%
+  t() %>%
+  scale() %>%
+  t() %>%
+
   as_tibble(rownames = "gene") %>%
   left_join(clsts, by = "gene") %>%
   filter(!is.na(cluster)) %>%
   pivot_longer(-c(gene, cluster), names_to = "cell_type") %>%
   mutate(
+    cell_type = as.factor(cell_type),
     cluster = fct_relevel(cluster, top_clsts$cluster)
   ) %>%
   arrange(cluster, cell_type)
+  
+# ORIGINAL VERSION
+# plt_dat <- mat %>%
+#   as_tibble(rownames = "gene") %>%
+#   left_join(clsts, by = "gene") %>%
+#   filter(!is.na(cluster)) %>%  # NAs are genes not found in any cluster
+#   pivot_longer(-c(gene, cluster), names_to = "cell_type") %>%
+#   mutate(
+#     cluster = fct_relevel(cluster, top_clsts$cluster)
+#   ) %>%
+#   arrange(cluster, cell_type)
+
+# Format data for drawing heatmap boxes
+type_lvls <- levels(plt_dat$cell_type)
+type_lvls <- set_names(seq_along(type_lvls), type_lvls)
+
+bx_dat <- up_types %>%
+  filter(n_types < 3) %>%
+  unnest(up_types) %>%
+  group_by(cluster, up_types) %>%
+  mutate(
+    x = type_lvls[up_types],
+    x = list(c(x - 0.5, x + 0.5))
+  ) %>%
+  ungroup() %>%
+  unnest(x) %>%
+  filter(cluster %in% plt_dat$cluster) %>%
+  mutate(cluster = fct_relevel(cluster, levels(plt_dat$cluster)))
 
 # Create heatmaps
 clst_clrs <- c(
@@ -1025,18 +1072,17 @@ clst_clrs <- c(
 
 h_heat <- plt_dat %>%
   # ggplot(aes(cell_type, gene, fill = value)) +
-  ggplot(aes(cell_type, gene, fill = cluster, alpha = value)) +
-  geom_tile() +
-  scale_alpha_continuous(range = c(0.01, 1)) +
+  # scale_fill_gradient2(low = "grey85", mid = "white", high = "#D7301F") +
   # scale_fill_gradient2(low = "#56B4E9", mid = "white", high = "#D7301F") +
+  # guides(fill = guide_colorbar(
+  #   ticks = FALSE,
+  #   title.position = "bottom",
+  #   barwidth = unit(150, "pt"), barheight = unit(10, "pt")
+  # )) +
+  
+  ggplot(aes(cell_type, gene, fill = cluster, alpha = value)) +
+  scale_alpha_continuous(range = c(0.01, 1)) +
   scale_fill_manual(values = clst_clrs) +
-  facet_wrap(
-    ~ cluster,
-    scales         = "free_y",
-    strip.position = "left",
-    labeller       = as_labeller(clst_lvls),
-    ncol = 1
-  ) +
   guides(
     fill = "none",
     alpha = guide_legend(
@@ -1046,11 +1092,15 @@ h_heat <- plt_dat %>%
       title.position = "top"
     )
   ) +
-  # guides(fill = guide_colorbar(
-  #   ticks = FALSE,
-  #   title.position = "bottom",
-  #   barwidth = unit(150, "pt"), barheight = unit(10, "pt")
-  # )) +
+  geom_vline(data = bx_dat, aes(xintercept = x)) +
+  geom_tile() +
+  facet_wrap(
+    ~ cluster,
+    scales         = "free_y",
+    strip.position = "left",
+    labeller       = as_labeller(clst_lvls),
+    ncol = 1
+  ) +
   scale_x_discrete(position = "top") +
   djvdj_theme() +
   theme(
@@ -1119,13 +1169,8 @@ go_bars <- go_res %>%
     strip.text = element_blank()
   )
 
-
-
-x <- sig_marks %>%
-  dplyr::select(gene, cell_type, avg_log2FC) %>%
-  pivot_wider(names_from = "cell_type", values_from = "avg_log2FC")
-
-
+go_res %>%
+  write_tsv(file.path(params$so_dir, "gene_clusters_go.tsv"))
 
 ```
 
