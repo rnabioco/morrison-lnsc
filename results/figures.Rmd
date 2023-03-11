@@ -897,6 +897,8 @@ p_clmns  <- str_c(reps, "_p_val_adj")
 
 # Format matrix
 # Only include genes >1.25 fold change and <0.05 adj p-value
+# This will cluster based only on fold changes for genes/cell types
+# sinificantly upregulated, genes that are not upregulated are set as 0
 sig_marks <- marks %>%
   filter(
     if_all(all_of(fc_clmns), ~ .x > log2(1.25)),
@@ -920,26 +922,38 @@ mat <- sig_marks %>%
   t()
 
 # Hierarchical clustering
-hcl <- mat %>%
-  dist() %>%
-  hclust(method = "ward.D")
+clsts_path <- here(params$so_dir, "gene_clusters.tsv")
 
-clsts <- cutree(hcl, k = 10)
-
-clsts <- tibble(
-  gene    = names(clsts),
-  cluster = as.character(unname(clsts))
-)
+if (!file.exists(clsts_path)) {
+  hcl <- mat %>%
+    dist() %>%
+    hclust(method = "ward.D")
+  
+  clsts <- cutree(hcl, k = 10)
+  
+  clsts <- tibble(
+    gene    = names(clsts),
+    cluster = as.character(unname(clsts))
+  )
+  
+  clsts %>%
+    write_tsv(clsts_path)
+  
+} else {
+  clsts <- read_tsv(clsts_path, col_types = cols(cluster = col_character()))
+}
 
 # Summarize gene fold change for each cluster
 # Calculate overall average fold change and p-value for each cell_type
+# Use average fold change to identify the predominant cell types upregulated for
+# each cluster
 clst_dat <- marks %>%
   dplyr::select(gene, cell_type, avg_log2FC, max_pval) %>%
   right_join(clsts, by = "gene") %>%
   group_by(cluster, cell_type) %>%
   mutate(
-    avg_log2FC = mean(avg_log2FC),
-    max_pval   = mean(max_pval),
+    type_log2FC = mean(avg_log2FC),
+    type_pval   = mean(max_pval),
   ) %>%
   ungroup()
 
@@ -947,11 +961,11 @@ clst_dat <- marks %>%
 clst_dat <- clst_dat %>%
   group_by(cluster) %>%
   mutate(
-    max_fc     = max(avg_log2FC),
-    max_fc_lim = max(avg_log2FC[avg_log2FC < unique(max_fc)]) * 1.5
+    max_fc     = max(type_log2FC),
+    max_fc_lim = max(type_log2FC[type_log2FC < unique(max_fc)]) * 1.5
   ) %>%
   filter(
-    cell_type %in% cell_type[avg_log2FC > log2(1.25) & max_pval < 0.05]
+    cell_type %in% cell_type[type_log2FC > log2(1.25) & type_pval < 0.05]
   )
 
 # Further filter cell types for each cluster
@@ -961,8 +975,8 @@ clst_dat <- clst_dat %>%
   filter(
     n_distinct(cell_type) == 1 |
     cell_type %in% cell_type[
-      (avg_log2FC == max_fc & max_fc > max_fc_lim) |
-      all(avg_log2FC <= max_fc_lim)
+      (type_log2FC == max_fc & max_fc > max_fc_lim) |
+      all(type_log2FC <= max_fc_lim)
     ]
   ) %>%
   mutate(
@@ -977,7 +991,11 @@ clst_dat <- clst_dat %>%
 clst_dat <- clst_dat %>%
   mutate(cluster = ifelse(shared, max(cluster[shared]), cluster))
 
-# Identify top clusters
+```
+
+```{r "H CLUSTERING HEATMAP"}
+
+# Identify top 6 clusters
 up_types <- clst_dat %>%
   distinct(cluster, gene, up_types, n_types) %>%
   group_by(cluster, up_types, n_types) %>%
@@ -994,13 +1012,16 @@ top_clsts <- up_types %>%
     rnk = row_number(),
     id  = str_replace(id, "_", " "),
     id = str_c(id, "\n", n, " genes")
-  ) %>%
-  head(6)
+  ) 
 
 clst_lvls <- set_names(top_clsts$id, top_clsts$cluster)
+
+top_clsts <- head(top_clsts, 6)
   
 # Format scaled data for plotting
 # Create new table with revised cluster IDs
+# Want to show fold changes for all genes/cell types when creating heatmaps,
+# not just upregulated genes
 clsts <- clst_dat %>%
   distinct(gene, cluster) %>%
   filter(cluster %in% top_clsts$cluster)
@@ -1123,19 +1144,29 @@ go_gns <- clsts %>%
   map(pull, gene)
 
 # Identify GO terms
-go_res <- go_gns %>%
-  gost(
-    organism = "mmusculus",
-    ordered_query = FALSE,
-    evcodes = TRUE
-  ) %>%
-  .$result %>%
-  filter(
-    source %in% c("GO:BP", "GO:MF", "KEGG"),
-    p_value < 0.05,
-    term_size < 500
-  ) %>%
-  arrange(p_value)
+go_file <- file.path(params$so_dir, "gene_clusters_go.tsv")
+
+if (!file.exists(go_file)) {
+  go_res <- go_gns %>%
+    gost(
+      organism = "mmusculus",
+      ordered_query = FALSE,
+      evcodes = TRUE
+    ) %>%
+    .$result %>%
+    filter(
+      source %in% c("GO:BP", "GO:MF", "KEGG"),
+      p_value < 0.05,
+      term_size < 500
+    ) %>%
+    arrange(p_value)
+  
+  go_res %>%
+    write_tsv(go_file)
+
+} else {
+  go_res <- read_tsv(go_file, col_types = cols(query = col_character()))
+}
 
 # Create GO bargraphs
 lab_fn <- function(x) {
@@ -1168,9 +1199,6 @@ go_bars <- go_res %>%
     legend.position = "none",
     strip.text = element_blank()
   )
-
-go_res %>%
-  write_tsv(file.path(params$so_dir, "gene_clusters_go.tsv"))
 
 ```
 
@@ -1253,7 +1281,7 @@ gn_bxs <- dat %>%
 
 ```
 
-```{r "H FINAL", fig.height = 10, fig.width = 10}
+```{r "H FIGURE", fig.height = 10, fig.width = 10}
 
 plot_grid(
   h_heat, go_bars, gn_bxs,
@@ -1266,6 +1294,46 @@ plot_grid(
 )
 
 ```
+
+```{r "H SUPP", eval = FALSE}
+
+# Format cluster labels
+tab_labs <- clst_lvls %>%
+  map_chr(str_remove, "\n.+") %>%
+  map_chr(str_replace, "[/ ]", "_")
+
+# Format table for gene clusters
+tab_dat <- clst_dat %>%
+  group_by(gene, cluster) %>%
+  summarize(
+    avg_log2FC = mean(avg_log2FC),
+    # pval       = mean(max_pval),
+    .groups    = "drop"
+  ) %>%
+  mutate(cluster = tab_labs[cluster]) %>%
+  group_by(cluster) %>%
+  mutate(n_genes = n_distinct(gene)) %>%
+  ungroup() %>%
+  arrange(desc(n_genes), desc(avg_log2FC)) %>%
+  as.data.frame()
+
+# Write excel file
+tab_labs %>%
+  walk(~ {
+    tab_dat %>%
+      filter(cluster == .x) %>%
+      xlsx::write.xlsx(
+        file      = file.path(params$so_dir, "gene_clusters.xlsx"),
+        sheetName = .x,
+        append    = TRUE,
+        col.names = TRUE,
+        row.names = FALSE
+      )
+  })
+
+```
+
+
 
 
 
