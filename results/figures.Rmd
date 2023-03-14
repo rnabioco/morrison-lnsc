@@ -2,8 +2,13 @@
 title: "CHIKV LNSC figures"
 author: "Ryan Sheridan"
 date: "`r Sys.Date()`"
-output: html_document
-
+output: 
+  html_document:
+    toc:       true
+    toc_float: true
+    toc_depth: 2
+    theme:     cosmo
+    highlight: kate
 params:
   template_dir: "src"
   so_dir:       "~/Dropbox/Ryan/Projects/morrison-lnsc/results/sobjs"
@@ -592,7 +597,7 @@ plot_grid(l, r, nrow = 1, rel_widths = c(1, 0.5))
 
 CHIKV may target MARCO-expressing LECs for infection
 
-```{r "fig S1A", fig.width = 10, fig.height = 10}
+```{r "UMAPs", fig.width = 10, fig.height = 10}
 # Pseudo count for pct_mito
 pseudo <- so_24$pct_mito
 pseudo <- min(pseudo[pseudo > 0]) / 2
@@ -603,8 +608,26 @@ dat <- so_24@meta.data %>%
   mutate(pct_mito = pct_mito + pseudo) %>%
   arrange(CHIKV_sgRNA_fc)
 
+chikv_dat <- dat %>%
+  filter(chikv_grp == chikv_grps[2])
+
+# Cell type UMAP
+type_umap <- dat %>%
+  plot_scatter(
+    "lec_type",
+    plot_colors = lec_type_cols,
+    plot_lvls   = NULL,
+    size = 0.2,
+    label_params = list(size = txt_pt2)
+  ) +
+  umap_theme +
+  theme(
+    aspect.ratio = 0.9,
+    legend.title = element_blank(), legend.key.height = unit(30, "pt")
+  )
+  
 # sgRNA ratio UMAP
-A <- dat %>%
+sgRNA_umap <- dat %>%
   ggplot(aes(UMAP_1, UMAP_2, fill = CHIKV_sgRNA_fc)) +
   geom_point_trace(
     color = "grey",
@@ -625,31 +648,35 @@ A <- dat %>%
   )
 ```
 
-```{r "fig S1B", fig.width = 10, fig.height = 7}
-# Scatter plots
+```{r "scatter plots", fig.width = 10, fig.height = 7}
+# ONLY PLOT CHIKV-HIGH CELLS
+# Shouldn't include any CHIKV-low cells, since they have been filtered
+# stringently based on QC and CHIKV-high cells have not. This would influence
+# correlations
+
+# Stats to plot
 y_vars <- c(
   "# mouse genes\nexpressed" = "nFeature_RNA",
   "% mitochondrial\nreads" = "pct_mito"
 )
 
-typs <- c("Marco_LEC", "PvC", "BEC")
+x_var <- "CHIKV_sgRNA_fc"
+typs  <- c("Marco_LEC", "BEC", "PvC", "unassigned-LEC")
 
-dat <- dat %>%
-  filter(
-    chikv_grp == chikv_grps[2],
-    lec_type %in% typs
-  ) %>%
+# Scatter plots
+plt_dat <- chikv_dat %>%
+  filter(lec_type %in% typs) %>%
   mutate(lec_type = fct_relevel(lec_type, typs)) %>%
   dplyr::rename(!!!syms(y_vars)) %>%
   pivot_longer(all_of(names(y_vars))) %>%
   group_by(lec_type, name) %>%
   mutate(
-    cor = cor(log10(CHIKV_sgRNA_fc), log10(value)),
+    cor = cor(log10(!!sym(x_var)), log10(value)),
     cor = str_c("r = ", round(cor, 2))
   ) %>%
   ungroup()
 
-B <- dat %>%
+scatter <- plt_dat %>%
   split(.$lec_type) %>%
   unname() %>%
   imap(~ {
@@ -677,7 +704,7 @@ B <- dat %>%
         }
         
         .x %>%
-          ggplot(aes(CHIKV_sgRNA_fc, value, color = lec_type)) +
+          ggplot(aes(!!sym(x_var), value, color = lec_type)) +
           geom_point() +
           geom_smooth(
             method = "lm", formula = y ~ x,
@@ -694,14 +721,95 @@ B <- dat %>%
           labs(title = ttl, subtitle = sub, x = x_ttl, y = y_ttl) +
           theme(aspect.ratio = 0.9) +
           base_theme +
-          theme(legend.position = "none")
+          theme(
+            legend.position = "none",
+            axis.text.x = element_text(size = txt_pt1),
+            axis.text.y = element_text(size = txt_pt1)
+          )
       })
   }) %>%
   flatten() %>%
   wrap_plots(byrow = FALSE, nrow = 2)
 ```
 
-```{r "fig S1C", fig.width = 10, fig.height = 6.5}
+```{r "sgRNA signal"}
+# Format plot data
+# only include cell types with >10 cells
+plt_dat <- dat %>%
+  filter(treatment == treats[2])
+
+typs <- plt_dat %>%
+  filter(chikv_grp == chikv_grps[2]) %>%
+  pull(lec_type) %>%
+  table() %>%
+  sort(decreasing = TRUE)
+
+typs <- names(typs[typs > 10])
+
+# Fraction CHIKV-high cells
+frac_dat <- plt_dat %>%
+  group_by(lec_type, rep) %>%
+  summarize(
+    n = length(chikv_grp[chikv_grp == chikv_grps[2]]),
+    tot = n(),
+    frac = n / tot,
+    .groups = "drop"
+  ) %>%
+  group_by(lec_type) %>%
+  mutate(tot = sum(tot)) %>%
+  ungroup() %>%
+  mutate(lec_type = fct_reorder(lec_type, frac, max, .desc = TRUE))
+
+n_lab <- get_nlab_fun(plt_dat, "lec_type", l = "\n", r = "")
+
+n_lab <- n_lab() %>%
+  map_chr(str_replace, "_", " ")
+
+frac_bars <- frac_dat %>%
+  ggplot(aes(lec_type, frac, fill = lec_type, color = lec_type, alpha = rep)) +
+  geom_col(position = "dodge") +
+  scale_alpha_manual(values = c(0.1, 0.3, 0.6)) +
+  scale_fill_manual(values = lec_type_cols) +
+  scale_color_manual(values = lec_type_cols) +
+  scale_x_discrete(labels = n_lab) +
+  labs(y = "Fraction\nCHIKV-high cells") +
+  base_theme +
+  theme(
+    axis.text.y = element_text(size = txt_pt1),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title.x = element_blank(),
+    legend.position = "none",
+    aspect.ratio = 0.2,
+    plot.margin = margin(25, 5, 5, 15)
+  )
+
+# sgRNA ratio
+# Filter to include cells with >0 sgRNA counts and >0 5' counts
+sgRNA_boxes <- plt_dat %>%
+  filter(
+    lec_type %in% typs,
+    CHIKV_sgRNA > 0,
+    CHIKV_5 > 0
+  ) %>%
+  plot_violin(
+    "CHIKV_sgRNA_fc",
+    cluster_col = "lec_type",
+    plot_colors = lec_type_cols,
+    plot_lvls   = NULL,
+    trans       = "log10",
+    scale       = "width",
+    draw_quantiles = c(0.25, 0.75)
+  ) +
+  labs(y = "CHIKV sgRNA\nratio") +
+  base_theme +
+  theme(
+    axis.text.y = element_text(size = txt_pt1),
+    aspect.ratio = 0.25,
+    plot.margin = margin(25, 5, 5, 15)
+  )
+```
+
+```{r "type examples", fig.width = 10, fig.height = 6.5}
 # Genes to plot
 gns <- c(
   "Lyve1", "Marco",    # Marco LECs
@@ -711,7 +819,7 @@ gns <- c(
 )
 
 # Format data
-dat <- list("8hpi" = so_8, "24hpi" = so_24) %>%
+plt_dat <- list("8hpi" = so_8, "24hpi" = so_24) %>%
   imap_dfr(~ {
     .x %>%
       FetchData(c("lec_type", "treatment", "rep", gns)) %>%
@@ -721,9 +829,9 @@ dat <- list("8hpi" = so_8, "24hpi" = so_24) %>%
   mutate(tm = fct_relevel(tm, c("8hpi", "24hpi")))
 
 # Create boxplots
-C <- gns %>%
+type_boxes <- gns %>%
   map(~ {
-    lvls <- dat %>%
+    lvls <- plt_dat %>%
       group_by(lec_type) %>%
       summarize(
         stats = list(boxplot.stats(!!sym(.x))),
@@ -736,7 +844,7 @@ C <- gns %>%
       pull(lec_type) %>%
       rev()
       
-    dat %>%
+    plt_dat %>%
       mutate(lec_type = fct_relevel(lec_type, lvls)) %>%
       ggplot(aes(lec_type, !!sym(.x), color = lec_type, fill = lec_type)) +
       geom_boxplot(
@@ -766,21 +874,65 @@ C <- gns %>%
   )
 ```
 
-```{r "fig S1", fig.width = 15, fig.height = 14}
+### Version 1
+
+```{r "fig S1 v1", fig.width = 15, fig.height = 14}
+left <- plot_grid(
+  sgRNA_boxes, scatter,
+  labels = c("B", "C"), label_size = ttl_pt2 * 1.5,
+  align = "v", axis = "rl",
+  rel_heights = c(0.7, 1),
+  ncol = 1
+)
+
 top <- plot_grid(
-  A, B,
-  labels = c("A", "B"), label_size = ttl_pt2 * 1.5,
-  align = "h", axis = "tb",
+  sgRNA_umap, left,
+  labels = c("A", ""), label_size = ttl_pt2 * 1.5,
+  rel_widths = c(0.8, 1),
   nrow = 1
 )
 
 plot_grid(
-  top, C,
-  labels = c("", "C"), label_size = ttl_pt2 * 1.5,
+  top, type_boxes,
+  labels = c("", "D"), label_size = ttl_pt2 * 1.5,
   align = "v", axis = "rl",
   ncol = 1
 )
 ```
+
+<br>
+
+### Version 2
+
+```{r "fig S1 v2", fig.width = 16, fig.height = 14}
+top <- plot_grid(
+  type_umap, sgRNA_umap,
+  labels = c("A", "B"), label_size = ttl_pt2 * 1.5,
+  align = "vh", axis = "trbl",
+  nrow = 1
+)
+
+left <- plot_grid(
+  frac_bars, sgRNA_boxes,
+  labels = c("C", "D"), label_size = ttl_pt2 * 1.5,
+  align = "v", axis = "rl",
+  ncol = 1
+)
+
+bot <- plot_grid(
+  left, scatter,
+  labels = c("", "E"), label_size = ttl_pt2 * 1.5,
+  rel_widths = c(0.75, 1),
+  nrow = 1
+)
+
+plot_grid(
+  top, bot,
+  rel_heights = c(1, 0.75),
+  ncol = 1
+)
+```
+
 
 
 ```{r "cell type markers", fig.height = 21, fig.width = 20, eval = FALSE}
