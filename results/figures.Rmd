@@ -203,6 +203,81 @@ create_cor_heatmap <- function(df_in, ttl, lec_labs = NULL) {
   
   res
 }
+
+create_gene_boxplot <- function(input, GENE, TYPE, clr = lec_type_cols[[TYPE]]) {
+  
+  # Format plot data
+  dat <- input %>%
+    FetchData(c("lec_type", "treatment", "rep", "orig.ident", "chikv_grp", GENE)) %>%
+    filter(lec_type == TYPE) %>%
+    mutate(
+      chikv_grp = ifelse(treatment == "mock", treatment, chikv_grp),
+      chikv_grp = recode(chikv_grp, `CHIKV-low` = "CHIKV-", `CHIKV-high` = "CHIKV+")
+    )
+  
+  clrs <- set_names(
+    c("grey", rep(clr, 2)),
+    unique(dat$chikv_grp)
+  )
+  
+  # Calculate p-values
+  p_vals <- dat %>%
+    calc_p_vals(
+      data_column = GENE,
+      type_column = "chikv_grp"
+    )
+  
+  comps <- names(clrs) %>%
+    combn(2, simplify = FALSE)
+  
+  comps <- list(
+    x    = map_chr(comps, pluck, 1),
+    xend = map_chr(comps, pluck, 2),
+    y    = c(5, 5.6, 5)
+  )
+  
+  # Create boxplots
+  res <- dat %>%
+    plot_violin(
+      GENE, "chikv_grp",
+      method        = "boxplot",
+      plot_colors   = clrs,
+      plot_lvls     = names(clrs),
+      alpha         = c(0.5, 0.1, 0.5),
+      size          = 1,
+      outlier.size  = 1.5,
+      outlier.alpha = 1,
+      width         = 0.6
+    ) +
+    labs(title = TYPE, y = str_c(GENE, " expression")) +
+    base_theme +
+    theme(
+      aspect.ratio = 1.5,
+      plot.title   = element_text(size = ttl_pt2 * 1.5),
+      axis.title.y = element_text(size = ttl_pt2),
+      axis.text.x  = element_text(size = ttl_pt2, hjust = c(0.75, 0.5, 0.25))
+    )
+  
+  # Add p-values to plot
+  comps %>%
+    pwalk(~ {
+      v_args <- list(...)[c("x", "xend")]
+      
+      p <- p_vals %>%
+        filter(`Cell type 1` %in% v_args & `Cell type 2` %in% v_args) %>%
+        pull(p_adj)
+      
+      res <<- res %>%
+        add_pvals(
+          ...,
+          p_val    = p,
+          size     = txt_pt2 / .pt,
+          line_col = "grey75"
+        )
+    })
+  
+  res
+}
 ```
 
 ```{r "load objects"}
@@ -468,7 +543,7 @@ C. CHIKV counts are shown for cell types with >50 cells for the 8 hpi CHIKV-infe
 
 D. The fraction of cells identified as CHIKV+ is shown for each cell type for the 8 hpi timepoint.
 
-E. MARCO expression is shown for fLECs for mock-infected cells and CHIKV-infected cells classified as either CHIKV low or CHIKV high. P values were calculated using a two-sided Wilcoxon rank-sum test with Bonferroni correction. In the boxplot, the central lines, the box limits, and the whiskers represent medians, the interquartile range (IQR), and min/max values that are not outliers, respectively. Outliers are shown as points and include any values that are more than 1.5× IQR away from the box.
+E, F. MARCO (E) or Madcam1 (F) expression is shown for fLECs for mock-infected cells and CHIKV-infected cells classified as either CHIKV low or CHIKV high. P values were calculated using a two-sided Wilcoxon rank-sum test with Bonferroni correction. In the boxplot, the central lines, the box limits, and the whiskers represent medians, the interquartile range (IQR), and min/max values that are not outliers, respectively. Outliers are shown as points and include any values that are more than 1.5× IQR away from the box.
 
 ```{r "fig 1A", fig.width = 10, fig.height = 10}
 # Format plot data
@@ -628,75 +703,11 @@ count_bxs <- plot_grid(
 ```
 
 ```{r "fig 1D", fig.width = 3, fig.height = 5}
-# Format plot data
-dat <- so_8 %>%
-  FetchData(c("lec_type", "treatment", "rep", "orig.ident", "chikv_grp", "Marco")) %>%
-  filter(lec_type == "fLEC") %>%
-  mutate(
-    chikv_grp = ifelse(treatment == "mock", treatment, chikv_grp),
-    chikv_grp = recode(chikv_grp, `CHIKV-low` = "CHIKV-", `CHIKV-high` = "CHIKV+")
-  )
+marco_bxs <- so_8 %>%
+  create_gene_boxplot("Marco", "fLEC", clr = "#D7301F")
 
-clrs <- set_names(
-  c("grey", rep(lec_type_cols[["fLEC"]], 2)),
-  unique(dat$chikv_grp)
-)
-
-# Calculate p-values
-p_vals <- dat %>%
-  calc_p_vals(
-    data_column = "Marco",
-    type_column = "chikv_grp"
-  )
-
-comps <- names(clrs) %>%
-  combn(2, simplify = FALSE)
-
-comps <- list(
-  x    = map_chr(comps, pluck, 1),
-  xend = map_chr(comps, pluck, 2),
-  y    = c(5, 5.6, 5)
-)
-
-# Create boxplots
-D <- dat %>%
-  plot_violin(
-    "Marco", "chikv_grp",
-    method        = "boxplot",
-    plot_colors   = clrs,
-    plot_lvls     = names(clrs),
-    alpha         = c(0.5, 0.1, 0.5),
-    size          = 1.5,
-    outlier.size  = 1.5,
-    outlier.alpha = 1,
-    width         = 0.6
-  ) +
-  labs(title = "fLEC", y = "Marco expression") +
-  base_theme +
-  theme(
-    aspect.ratio = 1.5,
-    plot.title   = element_text(size = ttl_pt2 * 1.5),
-    axis.title.y = element_text(size = ttl_pt2),
-    axis.text.x  = element_text(size = ttl_pt2, hjust = c(0.75, 0.5, 0.25))
-  )
-
-# Add p-values to plot
-comps %>%
-  pwalk(~ {
-    v_args <- list(...)[c("x", "xend")]
-    
-    p <- p_vals %>%
-      filter(`Cell type 1` %in% v_args & `Cell type 2` %in% v_args) %>%
-      pull(p_adj)
-    
-    D <<- D %>%
-      add_pvals(
-        ...,
-        p_val    = p,
-        size     = txt_pt2 / .pt,
-        line_col = "grey75"
-      )
-  })
+madcam_bxs <- so_8 %>%
+  create_gene_boxplot("Madcam1", "fLEC", clr = "#E69F00")
 ```
 
 ```{r "fig 1", fig.width = 15, fig.height = 12}
@@ -709,10 +720,10 @@ top <- plot_grid(
 )
 
 bot <- plot_grid(
-  count_bxs, NULL, D,
-  labels = c("", "", "E"), label_size = ttl_pt2 * 1.5,
+  count_bxs, NULL, marco_bxs, NULL, madcam_bxs,
+  labels = c("", "", "E", "", "F"), label_size = ttl_pt2 * 1.5,
   nrow   = 1,
-  rel_widths = c(1, 0.05, 0.5)
+  rel_widths = c(1, 0.05, 0.3, 0.05, 0.3)
 )
 
 plot_grid(
