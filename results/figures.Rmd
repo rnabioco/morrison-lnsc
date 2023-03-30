@@ -462,11 +462,13 @@ in the draining lymph node at 8 hpi
 
 A. UMAP projection shows the fraction of counts aligning to the CHIKV genome for the 8 hpi timepoint.
 
-B. CHIKV counts are shown for cell types with >50 cells for the 8 hpi CHIKV-infected sample.
+B. UMAP projection shows CHIKV+ cells (>0 CHIKV counts) for the 8 hpi timepoint.
 
-C. UMAP projection shows CHIKV-high cells (>0 CHIKV counts) for the 8 hpi timepoint.
+C. CHIKV counts are shown for cell types with >50 cells for the 8 hpi CHIKV-infected sample.
 
-D. MARCO expression is shown for fLECs for mock-infected cells and CHIKV-infected cells classified as either CHIKV low or CHIKV high. P values were calculated using a two-sided Wilcoxon rank-sum test with Bonferroni correction. In the boxplot, the central lines, the box limits, and the whiskers represent medians, the interquartile range (IQR), and min/max values that are not outliers, respectively. Outliers are shown as points and include any values that are more than 1.5× IQR away from the box.
+D. The fraction of cells identified as CHIKV+ is shown for each cell type for the 8 hpi timepoint.
+
+E. MARCO expression is shown for fLECs for mock-infected cells and CHIKV-infected cells classified as either CHIKV low or CHIKV high. P values were calculated using a two-sided Wilcoxon rank-sum test with Bonferroni correction. In the boxplot, the central lines, the box limits, and the whiskers represent medians, the interquartile range (IQR), and min/max values that are not outliers, respectively. Outliers are shown as points and include any values that are more than 1.5× IQR away from the box.
 
 ```{r "fig 1A", fig.width = 10, fig.height = 10}
 # Format plot data
@@ -498,7 +500,7 @@ A <- dat %>%
   )
 ```
 
-```{r "fig 1C", fig.width = 10, fig.height = 10}
+```{r "CHIKV-high cell types", fig.width = 10, fig.height = 10}
 # Format plot data
 dat <- so_8@meta.data %>%
   filter(chikv_grp == chikv_grps[2])
@@ -511,7 +513,7 @@ dat <- dat %>%
   mutate(lec_type = fct_relevel(lec_type, names(plt_labs)))
 
 # Create UMAP
-C <- so_8@meta.data %>%
+chikv_typs_u <- so_8@meta.data %>%
   mutate(lec_type = fct_relevel(lec_type, names(plt_labs))) %>%
   ggplot(aes(UMAP_1, UMAP_2)) +
   geom_point_trace(
@@ -523,21 +525,23 @@ C <- so_8@meta.data %>%
   scale_color_manual(values = lec_type_cols, labels = plt_labs) +
   scale_y_discrete(labels = type_lab_fn) +
   guides(color = guide_legend(override.aes = list(size = 4))) +
-  labs(title = "CHIKV-high cell types") +
+  labs(title = "CHIKV+ cell types") +
   umap_theme +
   theme(
-    aspect.ratio      = 0.9,
-    plot.title        = element_text(size = ttl_pt2 * 1.5, hjust = 0.2),
-    legend.title      = element_blank(),
-    legend.key.height = unit(30, "pt"),
-    legend.text       = element_text(size = ttl_pt1)
+    aspect.ratio         = 0.9,
+    plot.title           = element_text(size = ttl_pt2 * 1.5, hjust = 0.2),
+    legend.title         = element_blank(),
+    legend.key.height    = unit(35, "pt"),
+    legend.justification = "bottom",
+    legend.text          = element_text(size = ttl_pt1)
   )
 ```
 
-```{r "fig 1B", fig.width = 3, fig.height = 6}
+```{r "8hpi fraction CHIKV-high"}
 # Format plot data
 # ONLY PLOTTING ENRICHED COUNTS
 dat <- so_8@meta.data %>%
+  as_tibble(rownames = ".cell_id") %>%
   filter(treatment == "CHIKV") %>%
   group_by(lec_type) %>%
   filter(n() > 50) %>%
@@ -548,45 +552,79 @@ dat <- so_8@meta.data %>%
     # enr = tot_nCount_CHIKV + 1
   )
 
-# Set plot levels
-lvls <- dat %>%
-  group_by(lec_type) %>%
+# Fraction CHIKV-high cells
+frac_dat <- dat %>%
+  group_by(lec_type, rep) %>%
   summarize(
-    med   = median(counts),
-    stats = list(boxplot.stats(counts)),
-    q3    = map_dbl(stats, ~ .x$stats[4]),
-    q4    = map_dbl(stats, ~ .x$stats[5]),
-    max   = max(counts),
+    n = length(chikv_grp[chikv_grp == chikv_grps[2]]),
+    tot = n(),
+    frac = n / tot,
     .groups = "drop"
   ) %>%
-  arrange(med, q3, q4, max) %>%
-  pull(lec_type)
+  group_by(lec_type) %>%
+  mutate(tot = sum(tot)) %>%
+  ungroup() %>%
+  mutate(lec_type = fct_reorder(lec_type, frac, max, .desc = TRUE))
 
-plt_labs <- get_nlab_fun(dat, "lec_type", l = "\n", r = "")
-plt_labs <- plt_labs()
-plt_labs <- map_chr(plt_labs, type_lab_fn)
+frac_lvls <- levels(frac_dat$lec_type)
 
-# Create boxplots
-B <- dat %>%
-  mutate(lec_type = fct_relevel(lec_type, lvls)) %>%
-  ggplot(
-    aes(counts + 1, lec_type, fill = lec_type, color = lec_type, alpha = rep)
-  ) +
-  geom_boxplot(size = 1, outlier.size = 1.5, outlier.alpha = 1) +
-  scale_x_log10() +
-  scale_y_discrete(labels = plt_labs)+
+n_lab <- get_nlab_fun(dat, "lec_type", l = "\n", r = "")
+
+n_lab <- n_lab() %>%
+  map_chr(str_replace, "_", " ")
+
+frac_bars <- frac_dat %>%
+  ggplot(aes(lec_type, frac, fill = lec_type, color = lec_type, alpha = rep)) +
+  geom_col(position = position_dodge2(padding = 0.12), width = 0.8, size = 1) +
+  scale_alpha_manual(values = c(0.3, 0.7)) +
   scale_fill_manual(values = lec_type_cols) +
   scale_color_manual(values = lec_type_cols) +
-  scale_alpha_manual(values = c(0.5, 0.5)) +
-  labs(x = "CHIKV counts + 1") +
+  scale_x_discrete(labels = n_lab) +
+  labs(y = "Fraction\nCHIKV+ cells") +
   base_theme +
   theme(
+    # aspect.ratio = 0.2
+    # plot.margin = margin(25, 5, 5, 15)
+    axis.text.y = element_text(size = txt_pt1),
+    axis.text.x = element_text(size = ttl_pt2, angle = 45, hjust = 1),
+    axis.title.x = element_blank(),
     legend.position = "none",
-    plot.margin     = margin(100, 5, 5, 5),
-    axis.title.y    = element_blank(),
-    axis.title.x    = element_text(size = ttl_pt2),
-    axis.text.y     = element_text(size = ttl_pt2)
   )
+```
+
+```{r "fig 1B", fig.width = 10, fig.height = 5}
+# Create boxplots
+count_bxs <- dat %>%
+  mutate(lec_type = fct_relevel(lec_type, frac_lvls)) %>%
+  ggplot(
+    aes(lec_type, counts + 1, fill = lec_type, color = lec_type, alpha = rep)
+  ) +
+  geom_boxplot(size = 1, outlier.size = 1.5, outlier.alpha = 1, position = position_dodge2(padding = 0.12), width = 0.8) +
+  scale_y_log10() +
+  scale_x_discrete(labels = plt_labs)+
+  scale_fill_manual(values = lec_type_cols) +
+  scale_color_manual(values = lec_type_cols) +
+  scale_alpha_manual(values = c(0.3, 0.7)) +
+  labs(y = "CHIKV counts + 1") +
+  base_theme +
+  theme(
+    # axis.text.x     = element_text(size = ttl_pt2, angle = 90, vjust = 0.5, hjust = 1)
+    # aspect.ratio = 0.2,
+    plot.margin     = margin(35, 5, 5, 50),
+    legend.position = "none",
+    axis.title.x    = element_blank(),
+    axis.title.y    = element_text(size = ttl_pt2),
+    axis.text.x     = element_blank(),
+    axis.ticks.x    = element_blank()
+  )
+
+count_bxs <- plot_grid(
+  count_bxs, frac_bars,
+  labels = c("C", "D"), label_size = ttl_pt2 * 1.5,
+  align = "v", axis = "rl",
+  ncol = 1,
+  rel_heights = c(0.8, 1)
+)
 ```
 
 ```{r "fig 1D", fig.width = 3, fig.height = 5}
@@ -594,11 +632,14 @@ B <- dat %>%
 dat <- so_8 %>%
   FetchData(c("lec_type", "treatment", "rep", "orig.ident", "chikv_grp", "Marco")) %>%
   filter(lec_type == "fLEC") %>%
-  mutate(chikv_grp = ifelse(treatment == "mock", treatment, chikv_grp))
+  mutate(
+    chikv_grp = ifelse(treatment == "mock", treatment, chikv_grp),
+    chikv_grp = recode(chikv_grp, `CHIKV-low` = "CHIKV-", `CHIKV-high` = "CHIKV+")
+  )
 
 clrs <- set_names(
   c("grey", rep(lec_type_cols[["fLEC"]], 2)),
-  c("mock", chikv_grps)
+  unique(dat$chikv_grp)
 )
 
 # Calculate p-values
@@ -636,7 +677,7 @@ D <- dat %>%
     aspect.ratio = 1.5,
     plot.title   = element_text(size = ttl_pt2 * 1.5),
     axis.title.y = element_text(size = ttl_pt2),
-    axis.text.x  = element_text(size = ttl_pt2)
+    axis.text.x  = element_text(size = ttl_pt2, hjust = c(0.75, 0.5, 0.25))
   )
 
 # Add p-values to plot
@@ -658,24 +699,45 @@ comps %>%
   })
 ```
 
-```{r "fig 1", fig.width = 15, fig.height = 20}
-l <- plot_grid(
-  A, C,
-  labels = c("A", "C"), label_size = ttl_pt2 * 1.5,
-  ncol   = 1,
-  align  = "v",
-  axis   = "rl"
+```{r "fig 1", fig.width = 15, fig.height = 12}
+top <- plot_grid(
+  A, chikv_typs_u,
+  labels = c("A", "B"), label_size = ttl_pt2 * 1.5,
+  nrow   = 1,
+  align  = "h",
+  axis   = "tb"
 )
 
-r <- plot_grid(
-  B, D,
-  labels = c("B", "D"), label_size = ttl_pt2 * 1.5,
-  ncol   = 1,
-  align  = "v",
-  axis   = "rl"
+bot <- plot_grid(
+  count_bxs, NULL, D,
+  labels = c("", "", "E"), label_size = ttl_pt2 * 1.5,
+  nrow   = 1,
+  rel_widths = c(1, 0.05, 0.5)
 )
 
-plot_grid(l, r, nrow = 1, rel_widths = c(1, 0.5))
+plot_grid(
+  top, NULL, bot,
+  ncol = 1,
+  rel_heights = c(1, 0.05, 0.7)
+)
+
+# l <- plot_grid(
+#   A, C,
+#   labels = c("A", "C"), label_size = ttl_pt2 * 1.5,
+#   ncol   = 1,
+#   align  = "v",
+#   axis   = "rl"
+# )
+# 
+# r <- plot_grid(
+#   B, D,
+#   labels = c("B", "D"), label_size = ttl_pt2 * 1.5,
+#   ncol   = 1,
+#   align  = "v",
+#   axis   = "rl"
+# )
+# 
+# plot_grid(l, r, nrow = 1, rel_widths = c(1, 0.5))
 ```
 
 <br>
@@ -967,45 +1029,7 @@ type_boxes <- gns %>%
   )
 ```
 
-### Version 1
-
-A. UMAP projection shows CHIKV sgRNA ratio (sgRNA counts / 5' counts) for the 24 hpi timepoint.
-
-B. CHIKV sgRNA ratio is shown for cells with >0 sgRNA counts and >0 5' counts. Cell types with at least 10 cells are shown.
-
-C. The correlation between CHIKV sgRNA ratio and QC metrics is shown for CHIKV-high cells.
-
-D. The expression of select marker genes is shown for the 8 hpi and 24 hpi timepoints.
-
-```{r "fig S1 v1", fig.width = 15, fig.height = 14}
-left <- plot_grid(
-  sgRNA_boxes, scatter,
-  labels = c("B", "C"), label_size = ttl_pt2 * 1.5,
-  align = "v", axis = "rl",
-  rel_heights = c(0.7, 1),
-  ncol = 1
-)
-
-top <- plot_grid(
-  sgRNA_umap, left,
-  labels = c("A", ""), label_size = ttl_pt2 * 1.5,
-  rel_widths = c(0.8, 1),
-  nrow = 1
-)
-
-plot_grid(
-  top, type_boxes,
-  labels = c("", "D"), label_size = ttl_pt2 * 1.5,
-  align = "v", axis = "rl",
-  ncol = 1
-)
-```
-
-<br>
-
-### Version 2
-
-Extended version of Figure S1
+### CHIKV signal
 
 A. UMAP projection shows annotated cell types for the 24 hpi timepoint.
 
@@ -1048,7 +1072,7 @@ plot_grid(
 
 <br>
 
-Extended cell type annotation figure
+### Cell type annotation
 
 A. The correlation between annotated LEC subsets and reference data is shown for the 8 hpi and 24 hpi timepoint.
 
@@ -1310,21 +1334,9 @@ feats %>%
 
 ## Figure 5
 
-CHIKV infection induces distinct cell type-specific gene expression programs
+IN PROGRESS
 
-A. The average fold change in expression is shown for the top 6 CHIKV-induced gene expression programs. Fold changes were scaled and centered for each gene (row). A darker tile indicates the gene is more strongly upregulated in the cell type (e.g. the Marco LEC cluster includes genes that are generally more highly upregulated in Marco LECs)
-
-B. The top 6 gene ontology terms are shown for the gene expression programs described in A.
-
-C. Select genes identified in A are shown below for mock- and CHIKV-infected samples. p-values comparing mock- and CHIKV-infected samples are shown above each set of boxplots.
-
-Brief description of approach:
-
-1. Upregulated genes for each cell type were identified by comparing mock- and CHIKV-infected samples. To be included, a gene must have an adjusted p-value <0.05 for all replicates and >1.25 fold increase in expression for all replicates.
-2. Hierarchical clustering was used to divide upregulated genes into 10 groups based on their average fold change in expression for each cell type.
-3. The top 7 clusters are shown below. The top 2 clusters (based on number of genes) appeared functionally similar and were merged into one cluster (interferon response).
-
-```{r "GSEA MARKERS"}
+```{r "GSEA MARKERS", eval = FALSE}
 # Cell types to test
 typs <- so_24 %>%
   get_cell_types("lec_type", "orig.ident", n_cells = 3)
@@ -1363,7 +1375,7 @@ marks <- marks %>%
 
 ```
 
-```{r "H CLUSTERING"}
+```{r "H CLUSTERING", eval = FALSE}
 
 # Marker stats columns
 reps     <- unique(so_24$rep)
@@ -1468,7 +1480,7 @@ clst_dat <- clst_dat %>%
 
 ```
 
-```{r "H CLUSTERING HEATMAP"}
+```{r "H CLUSTERING HEATMAP", eval = FALSE}
 
 # Identify top 6 clusters
 up_types <- clst_dat %>%
@@ -1611,7 +1623,7 @@ h_heat <- plt_dat %>%
 
 ```
 
-```{r "H CLUSTERING GO"}
+```{r "H CLUSTERING GO", eval = FALSE}
 
 # Format genes for GO analysis
 go_gns <- clsts %>%
@@ -1677,7 +1689,7 @@ go_bars <- go_res %>%
 
 ```
 
-```{r "H CLUSTERING TOP GENES"}
+```{r "H CLUSTERING TOP GENES", eval = FALSE}
 
 # gns <- c("Cd74", "H2-Ab1", "Lgmn", "Angpt2", "Pik3r1", "Gja1", "Ywhag")    # BEC
 # gns <- c("Vcam1", "Akt3", "Cdh5", "Ccl5", "F11r", "Olr1", "Dst", "Nlgn2")  # Marco
@@ -1756,7 +1768,7 @@ gn_bxs <- dat %>%
 
 ```
 
-```{r "H FIGURE", fig.height = 10, fig.width = 10}
+```{r "H FIGURE", fig.height = 10, fig.width = 10, eval = FALSE}
 
 plot_grid(
   h_heat, go_bars, gn_bxs,

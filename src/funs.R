@@ -1272,7 +1272,7 @@ add_pvals <- function(gg_in, x, xend, y, p_val, prefix = "", format_p = TRUE,
   }
   
   if (is.character(xend)) {
-    xend <- grep(xend, x_lvls)
+    xend <- grep(xend, x_lvls, fixed = TRUE)
   }
   
   x_mid   <- median(c(x, xend))
