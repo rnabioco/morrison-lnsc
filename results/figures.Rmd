@@ -137,7 +137,7 @@ plot_example_gene <- function(so_in, feat, grp, box_colors = NULL,
   )
 }
 
-create_cor_heatmap <- function(df_in, ttl, lec_labs = NULL) {
+create_cor_heatmap <- function(df_in, ttl, lec_labs = NULL, ln_clr = fade_0) {
   
   # # Cell type labels
   # lec_labs <- df_in %>%
@@ -168,12 +168,12 @@ create_cor_heatmap <- function(df_in, ttl, lec_labs = NULL) {
   # Create heatmaps
   res <- df_in %>%
     ggplot(aes(ref_type, assigned_type, fill = r)) +
-    geom_tile(color = fade_0, size = 0.2) +
+    geom_tile(color = ln_clr, size = 0.2) +
     
     geom_text(
       aes(label = round(r, 2)),
       data  = lab_df,
-      color = "white",
+      color = "black",
       size  = txt_pt1 / .pt
     ) +
     
@@ -255,7 +255,8 @@ create_gene_boxplot <- function(input, GENE, TYPE, clr = lec_type_cols[[TYPE]]) 
       aspect.ratio = 1.5,
       plot.title   = element_text(size = ttl_pt2 * 1.5),
       axis.title.y = element_text(size = ttl_pt2),
-      axis.text.x  = element_text(size = ttl_pt2, hjust = c(0.75, 0.5, 0.25))
+      axis.text.x  = element_text(size = ttl_pt2, hjust = c(0.75, 0.5, 0.25)),
+      plot.margin  = margin(5, 10, 5, 5)
     )
   
   # Add p-values to plot
@@ -680,12 +681,12 @@ count_bxs <- dat %>%
   scale_fill_manual(values = lec_type_cols) +
   scale_color_manual(values = lec_type_cols) +
   scale_alpha_manual(values = c(0.3, 0.7)) +
-  labs(y = "CHIKV counts + 1") +
+  labs(y = "CHIKV\ncounts + 1") +
   base_theme +
   theme(
     # axis.text.x     = element_text(size = ttl_pt2, angle = 90, vjust = 0.5, hjust = 1)
     # aspect.ratio = 0.2,
-    plot.margin     = margin(35, 5, 5, 50),
+    plot.margin     = margin(35, 5, 5, 25),
     legend.position = "none",
     axis.title.x    = element_blank(),
     axis.title.y    = element_text(size = ttl_pt2),
@@ -698,16 +699,50 @@ count_bxs <- plot_grid(
   labels = c("C", "D"), label_size = ttl_pt2 * 1.5,
   align = "v", axis = "rl",
   ncol = 1,
-  rel_heights = c(0.8, 1)
+  rel_heights = c(1, 1)
 )
 ```
 
-```{r "fig 1D", fig.width = 3, fig.height = 5}
+```{r "fig1 examples", fig.width = 3, fig.height = 5}
 marco_bxs <- so_8 %>%
   create_gene_boxplot("Marco", "fLEC", clr = "#D7301F")
 
 madcam_bxs <- so_8 %>%
   create_gene_boxplot("Madcam1", "fLEC", clr = "#E69F00")
+
+
+# # CHECK FOR CONTAMINATING fLEC CLUSTERS
+# # filter 24hpi Marco_LEC clusters to remove Madcam1+ cells
+# # removal of Madcam1+ clusters does not affect overall result
+# # i.e. CHIKV-high still shows higher Marco expression than CHIKV-low
+# test_dat <- so_lec_24 %>%
+#   mutate_meta(
+#     mutate,
+#     chikv_grp = ifelse(treatment == "mock", treatment, chikv_grp)
+#   ) %>%
+#   subset(lec_type == "Marco_LEC") %>%
+#   FetchData(c(
+#     "Madcam1", "Marco",
+#     "seurat_clusters", "orig.ident", "treatment", "rep",
+#     "chikv_grp"
+#   ))
+# 
+# clsts <- test_dat %>%
+#   group_by(seurat_clusters) %>%
+#   summarize(sig = mean(Madcam1), n = n()) %>%
+#   as.data.frame() %>%
+#   arrange(desc(sig)) %>%
+#   filter(sig <= 0.4) %>%
+#   pull(seurat_clusters)
+# 
+# plt_dat <- so_lec_24 %>%
+#   subset(seurat_clusters %in% clsts)
+# 
+# plt_dat %>%
+#   create_gene_boxplot("Madcam1", "Marco_LEC")
+# 
+# plt_dat %>%
+#   create_gene_boxplot("Marco", "Marco_LEC")
 ```
 
 ```{r "fig 1", fig.width = 15, fig.height = 12}
@@ -723,7 +758,7 @@ bot <- plot_grid(
   count_bxs, NULL, marco_bxs, NULL, madcam_bxs,
   labels = c("", "", "E", "", "F"), label_size = ttl_pt2 * 1.5,
   nrow   = 1,
-  rel_widths = c(1, 0.05, 0.3, 0.05, 0.3)
+  rel_widths = c(1, 0.05, 0.36, 0.05, 0.36)
 )
 
 plot_grid(
@@ -859,8 +894,6 @@ scatter <- plt_dat %>%
         if (.y == top) {
           ttl   <- type_lab_fn(unique(.x$lec_type))
           sub   <- str_c("n = ", nrow(.x))
-        } else if (clmn == 2) {
-          x_ttl <- "CHIKV sgRNA ratio"
         }
         
         .x %>%
@@ -888,8 +921,23 @@ scatter <- plt_dat %>%
           )
       })
   }) %>%
-  flatten() %>%
+  flatten()
+
+# x-axis title
+x_ttl <- scatter[[1]] +
+  labs(title = "CHIKV sgRNA ratio") +
+  theme(
+    plot.title = element_text(hjust = 0.5, vjust = 1, size = ttl_pt2)
+  )
+
+x_ttl <- get_title(x_ttl)
+
+# Create final figure
+scatter <- scatter %>%
   wrap_plots(byrow = FALSE, nrow = 2)
+
+scatter <- list(scatter, x_ttl) %>%
+  wrap_plots(ncol = 1, heights = c(1, 0.1))
 ```
 
 ```{r "sgRNA signal"}
@@ -984,7 +1032,7 @@ tms <- c("8hpi", "24hpi")
 typ_bx_dat <- list("8hpi" = so_8, "24hpi" = so_24) %>%
   imap_dfr(~ {
     .x %>%
-      FetchData(c("lec_type", "treatment", "rep", gns)) %>%
+      FetchData(c("lec_type", "treatment", "rep", "chikv_grp", gns)) %>%
       as_tibble(rownames = "cell_id") %>%
       mutate(
         tm = .y,
@@ -1067,8 +1115,14 @@ left <- plot_grid(
   ncol = 1
 )
 
+right <- plot_grid(
+  NULL, scatter, NULL,
+  rel_heights = c(0.15, 1, 0.15),
+  ncol = 1
+)
+
 bot <- plot_grid(
-  left, scatter,
+  left, right,
   labels = c("", "E"), label_size = ttl_pt2 * 1.5,
   rel_widths = c(0.75, 1),
   nrow = 1
@@ -1146,7 +1200,7 @@ heat_args <- list(
 )
 
 type_heats <- heat_args %>%
-  pmap(create_cor_heatmap) %>%
+  pmap(create_cor_heatmap, ln_clr = fade_0) %>%
   plot_grid(plotlist = .)
 ```
 
@@ -1168,22 +1222,35 @@ type_boxes <- gns %>%
       rev()
       
     typ_bx_dat %>%
-      mutate(lec_type = fct_relevel(lec_type, lvls)) %>%
-      ggplot(aes(lec_type, !!sym(.x), color = lec_type, fill = lec_type)) +
+      mutate(
+        lec_type = fct_relevel(lec_type, lvls),
+        chikv_grp = fct_relevel(chikv_grp, chikv_grps)
+      ) %>%
+      ggplot(aes(lec_type, !!sym(.x), color = lec_type, fill = lec_type, alpha = chikv_grp)) +
       geom_boxplot(
-        size = 0.5, alpha = 0.5,
-        outlier.size = 0.1, outlier.alpha = 1,
-        position = position_dodge2(preserve = "single")
+        size = 0.25, color = "black",
+        outlier.size = 0.01, outlier.alpha = 0.1,
+        position = position_dodge2(preserve = "single"),
+        key_glyph = draw_key_point,
       ) +
       scale_color_manual(values = lec_type_cols) +
       scale_fill_manual(values = lec_type_cols) +
+      scale_alpha_manual(values = c(`CHIKV-low` = 0.5, `CHIKV-high` = 1)) +
       scale_x_discrete(labels = type_lab_fn) +
       facet_wrap(~ tm_treat, ncol = 1) +
       labs(y = str_c(.x, " expression")) +
+      guides(
+        fill = "none", color = "none",
+        alpha = guide_legend(
+          override.aes = list(shape = 15, fill = "black", size = 4)
+        )
+      ) +
       base_theme +
       theme(
         aspect.ratio    = 0.15,
-        legend.position = "none",
+        legend.position = "top",
+        legend.title    = element_blank(),
+        legend.text     = element_text(size = txt_pt1),
         axis.title.x    = element_blank(),
         axis.text.x     = element_text(size = txt_pt2, angle = 90, hjust = 1, vjust = 0.5),
         axis.text.y     = element_text(size = txt_pt1 * 0.75),
