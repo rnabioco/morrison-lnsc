@@ -2077,7 +2077,7 @@ create_go_heatmap <- function(df_in, go_in, n_terms = 5, pval = 0.05,
   n_seq <- seq_len(n_terms)
   
   terms <- df_in %>%
-    arrange(cluster, p.adjust) %>%
+    arrange(cluster, desc(n), p.adjust) %>%
     group_by(cluster) %>%
     dplyr::slice(n_seq) %>%
     ungroup()
@@ -2115,14 +2115,11 @@ create_go_heatmap <- function(df_in, go_in, n_terms = 5, pval = 0.05,
       show.legend = FALSE
     ) +
     guides(fill = "none") +
-    
-    # facet_wrap(
-    #   ~ cluster, ncol = 1, scales = "free_y",
-    #   labeller = cluster_labels %||% "label_value"
-    # ) +
-    
-    facet_grid(~ cluster, scales = "free_y", space = "free_y") +
-    
+    # facet_grid(rows = "cluster", space = "free_y", scales = "free_y") +
+    facet_wrap(
+      ~ cluster, ncol = 1, scales = "free_y",
+      labeller = cluster_labels %||% "label_value"
+    ) +
     
     scale_alpha_continuous(range = c(0, 1)) +
     scale_fill_manual(values = clrs) +
@@ -2159,15 +2156,152 @@ go_heat <- clusters %>%
 ```
 
 ```{r "GO examples"}
+
+# Data for heatmaps
+create_gene_plots <- function(df_in, gns, deg_data = degs, color = "orange",
+                              cell_types = NULL,
+                              lvls = c("mock", "8hpi", "24hpi"), n_cells = 10) {
+  
+  df_in <- df_in %>%
+    dplyr::filter(name %in% gns) %>%
+    group_by(subtype, treatment, name) %>%
+    filter(n() > n_cells) %>%
+    group_by(subtype, name) %>%
+    filter(n_distinct(treatment) > 1)
+    
+  if (!is.null(cell_types)) {
+    df_in <- df_in %>%
+      dplyr::filter(subtype %in% cell_types)
+  }
+  
+  # Format data for plotting points
+  plt_dat <- df_in %>%
+    group_by(subtype, treatment, name) %>%
+    summarize(
+      n       = n(),
+      q3      = quantile(value, 0.75),
+      q1      = quantile(value, 0.25),
+      value   = median(value),
+      .groups = "drop"
+      # sd      = sd(value),
+      # err     = qt(0.975, df = n - 1) * (sd / sqrt(n)),  # 95% CI
+    ) %>%
+    mutate(
+      x_end     = match(treatment, lvls),
+      x         = x_end - 1,
+      treatment = fct_relevel(treatment, lvls)
+    )
+  
+  # Format data for plotting lines
+  # only plot cell types with at least one gene upregulated
+  # plot as segments so linetype can be varied based on significance
+  # need to pull table of DEGs to determine which timepoints/genes are signif
+  # pull median expression to use for the start and end of each segment
+  exp_dat <- plt_dat %>%
+    dplyr::select(name, treatment, subtype, value)
+  
+  ln_dat <- plt_dat %>%
+    left_join(deg_data, by = c(name = "gene", "treatment", "subtype")) %>%
+    
+    dplyr::filter(x > 0) %>%  # remove rows that start at 0 (occurs for mock)
+    
+    # need to set columns with treatment labels for segment start/end so
+    # correct expression values can be pulled
+    mutate(trt_end = lvls[x_end], trt_start = lvls[x]) %>%
+    
+    dplyr::select(
+      name, treatment, subtype,
+      x, x_end, trt_start, trt_end,
+      max_pval
+    ) %>%
+    
+    left_join(exp_dat, by = c("name", trt_start = "treatment", "subtype")) %>%
+    dplyr::rename(y = value) %>%
+    
+    left_join(exp_dat, by = c("name", trt_end = "treatment", "subtype")) %>%
+    dplyr::rename(y_end = value) %>%
+    
+    mutate(
+      significant = as.character(!is.na(max_pval)),
+      significant = fct_relevel(significant, c("TRUE", "FALSE"))
+    ) %>%
+    group_by(subtype) %>%
+    filter(any(significant == "TRUE")) %>%
+    ungroup()
+  
+  # Create plots
+  n_clrs <- length(lvls) - 1
+  clrs   <- 0.75 / n_clrs
+  clrs   <- 0.25 + (seq_along(lvls)[1:n_clrs] * clrs)
+  clrs   <- 1 - c(0.25, clrs)
+  clrs   <- lighten(color, clrs)
+  
+  res <- plt_dat %>%
+    filter(subtype %in% unique(ln_dat$subtype)) %>%
+    ggplot(aes(treatment, value, color = treatment)) +
+    
+    geom_errorbar(
+      aes(x = treatment, ymin = q1, ymax = q3),
+      color = "grey85",
+      # alpha = 0.2,
+      width = 0,
+      linewidth = 0.25
+    ) +
+    geom_point() +
+    
+    geom_segment(
+      aes(
+        x = x, xend = x_end, y = y, yend = y_end,
+        linetype = significant
+      ),
+      linewidth = 0.75,
+      data  = ln_dat,
+      color = color
+    ) +
+    
+    facet_grid(name ~ subtype, switch = "both", scales = "free_y") +
+    
+    scale_linetype_manual(values = c("TRUE" = 1, "FALSE" = 3)) +
+    
+    scale_color_manual(values = clrs) +
+    
+    scale_y_continuous(
+      breaks = (function(x) return(c(0, floor(max(x))))),
+      expand = expansion(c(0.2, 0.05))
+    ) +
+    
+    guides(
+      color = guide_legend(title.position = "top", title.hjust = 0.5),
+      linetype = guide_legend(title.position = "top", title.hjust = 0.5)
+    ) +
+    
+    djvdj_theme() +
+    theme(
+      legend.position = "bottom",
+      strip.clip      = "off",
+      strip.placement = "outside",
+      axis.text.x     = element_blank(),
+      axis.ticks.x    = element_blank(),
+      axis.title      = element_blank()
+    )
+  
+  res
+}
+
 # Example genes to plot
 # gns <- c("Bst2", "Irf7", "Cxcl9", "Cxcl10")
-gns <- go@compareClusterResult %>%
+# gns <- c(
+#   "Irf7", "Ifi44", "Iigp1", "Bst2", "Zbp1",
+#   "Cxcl9", "Cxcl10"
+# )
+# gns <- go$`so_8-up`@compareClusterResult %>%
+gns <- go$`so_merge-up`@compareClusterResult %>%
   filter(
-    Description %in% heat_terms$Description,
+    Description %in% clusters$`so_8-up`$clusters$Description,
     p.adjust < 0.05, qvalue < 0.2, Count >= 3
   ) %>%
   as_tibble() %>%
-  left_join(clsts, by = "Description") %>%
+  left_join(clusters$`so_8-up`$clusters, by = "Description") %>%
   mutate(geneID = str_split(geneID, "/")) %>%
   unnest(geneID) %>%
   group_by(geneID, cluster) %>%
@@ -2176,18 +2310,13 @@ gns <- go@compareClusterResult %>%
   group_by(cluster) %>%
   dplyr::slice(1:10) %>%
   ungroup() %>%
-  head(7) %>%
+  head(5) %>%
   pull(geneID)
 
-gns <- c(
-  "Irf7", "Ifi44", "Iigp1", "Bst2", "Zbp1",
-  "Cxcl9", "Cxcl10"
-)
-
-# Data for heatmaps
+# Format gene expression data
 trts <- c("mock", "8hpi", "24hpi")
 
-plt_dat <- list("8hpi" = so_8, "24hpi" = so_24) %>%
+gene_dat <- list("8hpi" = so_8, "24hpi" = so_24) %>%
   imap_dfr(~ {
     .x %>%
       FetchData(c("subtype", "orig.ident", "treatment", "rep", gns)) %>%
@@ -2204,140 +2333,42 @@ plt_dat <- list("8hpi" = so_8, "24hpi" = so_24) %>%
     treatment = fct_relevel(treatment, trts),
   )
 
-# # Heatmaps
-# plt_dat %>%
-#   filter(
-#     treatment != "24hpi",
-#     subtype %in% go@compareClusterResult$Cluster
-#   ) %>%
-#   group_by(subtype, treatment, name) %>%
-#   summarize(value = mean(value), .groups = "drop") %>%
-#   group_by(name) %>%
-#   mutate(value = as.numeric(scale(value))) %>%
-# plt_dat %>%
-#   filter(
-#     treatment != "24hpi",
-#     subtype %in% go@compareClusterResult$Cluster
-#   ) %>%
-#   group_by(subtype, treatment, name) %>%
-#   summarize(value = mean(value), .groups = "drop") %>%
-#   pivot_wider(names_from = treatment, values_from = value) %>%
-#   mutate(fc = `8hpi` / mock) %>%
-# 
-#   group_by(name) %>%
-#   mutate(value = as.numeric(scale(fc))) %>%
-#   ungroup() %>%
-#   
-#   ggplot(aes(subtype, name, fill = value)) +
-#   geom_tile() +
-#   scale_fill_gradientn(colours = c("lightblue", "white", "red")) +
-#   djvdj_theme() +
-#   theme(
-#     axis.text.x = element_text(angle = 45, hjust = 1),
-#     strip.clip  = "off"
-#   )
+# Format table of DEGs
+ln_trts <- c("8hpi" = "so_8-up", "24hpi" = "so_merge-up")
 
-# Line graphs
-dat <- plt_dat %>%
-  filter(subtype %in% go@compareClusterResult$Cluster) %>%
-  group_by(subtype, treatment, name) %>%
-  filter(n() > 10) %>%
-  summarize(
-    n       = n(),
-    sd      = sd(value),
-    value   = mean(value),
-    err     = qt(0.975, df = n - 1) * (sd / sqrt(n)),  # 95% CI
-    .groups = "drop"
-  ) %>%
-  mutate(treatment = as.numeric(fct_relevel(treatment, trts)))
+deg_data <- ln_trts %>%
+  imap_dfr(~ {
+    degs[[.x]] %>%
+      dplyr::filter(gene %in% gns) %>%
+      dplyr::mutate(treatment = .y) %>%
+      dplyr::select(gene, treatment, subtype, max_pval)
+  })
 
-p_dat <- plt_dat %>%
-  filter(subtype %in% go@compareClusterResult$Cluster) %>%
-  dplyr::select(treatment, subtype, name, value) %>%
-  group_by(subtype, treatment, name) %>%
-  filter(n() > 10) %>%
-  ungroup()
-
-ln_dat <- c("mock", "8hpi") %>%
-  map_dfr(~ {
-    p_trts <- c(.x, trts[match(.x, trts) + 1])
-    
-    p_dat %>%
-      filter(treatment %in% p_trts) %>%
-      group_by(subtype, name) %>%
-      mutate(
-        p = ifelse(
-          all(p_trts %in% treatment),
-          wilcox.test(value[treatment == p_trts[1]], value[treatment == p_trts[2]])$p.value,
-          as.numeric(NA)
-        )
-      ) %>%
-      ungroup() %>%
-      mutate(
-        p = p.adjust(p, method = "bonferroni"),
-        p = ifelse(p < 0.05, "p < 0.05", "ns")
-      ) %>%
-      distinct(treatment, subtype, name, p) %>%
-      filter(!is.na(p))
-  }) %>%
-  mutate(treatment = as.numeric(fct_relevel(treatment, trts))) %>%
-  left_join(dat, by = c("subtype", "treatment", "name")) %>%
+typs <- deg_data %>%
   group_by(subtype) %>%
-  filter(any(p == "p < 0.05"))
-  
-ln_plot <- dat %>%
-  filter(subtype %in% ln_dat$subtype) %>%
-  ggplot(aes(treatment, value, alpha = treatment)) +
-  geom_point(color = "orange") +
-  geom_line(
-    aes(linetype = p),
-    data  = ln_dat,
-    color = "black", alpha = 1
-  ) +
-  geom_errorbar(
-    aes(x = treatment, ymin = value - err, ymax = value + err),
-    color = "black",
-    alpha = 1,
-    width = 0.07
-  ) +
-  facet_grid(name ~ subtype, switch = "both", scales = "free_y") +
-  scale_alpha_continuous(range = c(0.25, 1)) +
-  scale_linetype_manual(values = c(`p < 0.05` = 1, ns = 2)) +
-  scale_y_continuous(breaks = (function(x) return(c(0, floor(max(x)))))) +
-  # scale_y_continuous(breaks = breaks_pretty(n = 2)) +
-  
-  guides(linetype = guide_legend(title = NULL), alpha = "none") +
-  
-  djvdj_theme() +
-  theme(
-    legend.position = "bottom",
-    strip.clip   = "off",
-    strip.placement = "outside",
-    axis.text.x  = element_blank(),
-    axis.ticks.x = element_blank(),
-    axis.title   = element_blank()
+  summarize(n_genes = n(), .groups = "drop") %>%
+  arrange(desc(n_genes)) %>%
+  head(8) %>%
+  pull(subtype)
+
+# Create plots
+ln_plot <- gene_dat %>%
+  create_gene_plots(
+    gns        = gns,
+    deg_data   = deg_data,
+    # cell_types = unique(go$`so_8-up`@compareClusterResult$Cluster),
+    cell_types = typs,
+    lvls       = trts,
+    color = "orange"
   )
 
-# # Boxplots
-# plt_dat %>%
-#   filter(treatment != "24hpi") %>%
-#   ggplot(aes(subtype, value, fill = treatment)) +
-#   geom_boxplot(
-#     outlier.size  = 0.1,
-#     outlier.alpha = 1,
-#     position      = position_dodge2(preserve = "single")
-#   ) +
-#   facet_wrap(~ name) +
-#   djvdj_theme() +
-#   theme(
-#     axis.text.x = element_text(angle = 45, hjust = 1)
-#   )
 ```
 
 ```{r "CD"}
 
 plot_grid(
-  ht_plot, ln_plot,
+  # go_heat$`so_8-up`, ln_plot,
+  go_heat$`so_merge-up`, ln_plot,
   nrow = 1,
   align = "h",
   axis  = "tb"
