@@ -14,7 +14,7 @@ params:
   so_dir:       "~/Dropbox/Ryan/Projects/morrison-lnsc/results/sobjs"
   orig_so_dir:  "~/Dropbox/Ryan/Projects/morrison-scRNA-seq/results"
 editor_options: 
-  chunk_output_type: console
+  chunk_output_type: inline
 ---
 
 <br>
@@ -1782,9 +1782,7 @@ feats %>%
 
 ## Figure 5
 
-### 8 hpi
-
-```{r "8 hpi DEGs"}
+```{r "DEGs"}
 # Identify DEGs
 get_degs <- function(so_in, ident_1 = "CHIKV", ident_2 = "mock",
                      pval = 0.05, log_fc = c(0.15, Inf),
@@ -1906,7 +1904,7 @@ degs <- deg_args %>%
   flatten()
 ```
 
-```{r "8 hpi GO"}
+```{r "GO"}
 # GO terms
 # only use top 200 DEGs
 # for plotting include all terms regardless of significance
@@ -1977,7 +1975,7 @@ go <- go_degs %>%
     typ   <- str_remove(.y, ".+(?=-)")
     so_in <- str_remove(.y, "-.+$")
     prfx  <- str_remove(so_in, "^so_")
-    file <- str_c(prfx, "_subtype_chikv", typ, "_go.tsv")
+    file <- str_c(prfx, "_subtype_chikv", typ, "_go")
     file <- here("results/tables", file)
     
     .x %>%
@@ -1990,7 +1988,7 @@ go <- go_degs %>%
 
 ```{r "GO clusters"}
 
-get_clusters <- function(go_in, k = 2, pval = 0.05, qval = 0.2, n_overlap = 3,
+get_clusters <- function(go_in, k = 3, pval = 0.05, qval = 0.2, n_overlap = 3,
                          n_shared = 2) {
   
   # Filter GO terms
@@ -2058,8 +2056,9 @@ get_clusters <- function(go_in, k = 2, pval = 0.05, qval = 0.2, n_overlap = 3,
 clusters <- go %>%
   imap(~ {
     ovlp <- ifelse(grepl("^so_8-", .y), 3, 10)
+    k    <- ifelse(grepl("^so_8-", .y), 2, 3)
     
-    get_clusters(.x, n_overlap = ovlp)
+    get_clusters(.x, k = k, n_overlap = ovlp)
   }) %>%
   discard(is.null)
 
@@ -2067,16 +2066,23 @@ clusters <- go %>%
 
 ```{r "GO heatmaps"}
 
-create_go_heatmap <- function(df_in, go_in, n_terms = 5, pval = 0.05,
-                              qval = 0.2, n_overlap = 3,
-                              clrs = c("lightblue", "orange", "red"),
+create_go_heatmap <- function(df_in, go_in, n_clusters = 2, n_terms = 5,
+                              pval = 0.05, qval = 0.2, n_overlap = 3,
+                              clrs = c("orange", "lightblue", "red"),
                               cluster_labels = NULL) {
   
   # GO terms to plot
   # df_in includes combined GO terms identified across all cell types
+  top_clusters <- df_in$cluster %>%
+    table() %>%
+    sort(decreasing = TRUE) %>%
+    head(n_clusters) %>%
+    names()
+  
   n_seq <- seq_len(n_terms)
   
   terms <- df_in %>%
+    dplyr::filter(cluster %in% top_clusters) %>%
     arrange(cluster, desc(n), p.adjust) %>%
     group_by(cluster) %>%
     dplyr::slice(n_seq) %>%
@@ -2102,7 +2108,7 @@ create_go_heatmap <- function(df_in, go_in, n_terms = 5, pval = 0.05,
   # cell type, just mean p-values summarizing overall significance across
   # all cell types
   p_dat <- dat %>%
-    dplyr::filter(p.adjust < pval, qvalue < qval, Count >= 3)
+    dplyr::filter(p.adjust < pval, qvalue < qval, Count >= n_overlap)
   
   # Create heatmap
   res <- dat %>%
@@ -2138,32 +2144,46 @@ create_go_heatmap <- function(df_in, go_in, n_terms = 5, pval = 0.05,
       axis.text.x     = element_text(angle = 45, hjust = 1)
     )
   
+  res <- list(
+    heatmap = res,
+    terms = terms
+  )
+  
   res
 }
+
+# pval, qval, n_overlap cutoffs should match those used for clustering
+clrs_8  <- c(`1` = "#E69F00", `2` = "#56B4E9")
+clrs_24 <- c(`1` = "#D7301F", `2` = "#6A51A3")
 
 go_heat <- clusters %>%
   imap(~ {
     go_in <- go[[.y]]
     ovlp  <- ifelse(grepl("^so_8-", .y), 3, 10)
     
+    if (grepl("^so_8-", .y)) clrs <- clrs_8
+    else                     clrs <- clrs_24
+    
     .x$clusters %>%
       create_go_heatmap(
         go_in     = go_in,
-        n_overlap = ovlp
+        n_overlap = ovlp,
+        clrs      = clrs
       )
   })
 
 ```
 
-```{r "GO examples"}
+```{r "8hpi examples"}
 
-# Data for heatmaps
-create_gene_plots <- function(df_in, gns, deg_data = degs, color = "orange",
-                              cell_types = NULL,
+create_gene_plots <- function(df_in, gns, deg_data = degs,
+                              clrs = c(`1` = "orange"), cell_types = NULL,
                               lvls = c("mock", "8hpi", "24hpi"), n_cells = 10) {
   
+  genes <- names(gns)
+  
   df_in <- df_in %>%
-    dplyr::filter(name %in% gns) %>%
+    dplyr::filter(name %in% genes) %>%
     group_by(subtype, treatment, name) %>%
     filter(n() > n_cells) %>%
     group_by(subtype, name) %>%
@@ -2189,7 +2209,9 @@ create_gene_plots <- function(df_in, gns, deg_data = degs, color = "orange",
     mutate(
       x_end     = match(treatment, lvls),
       x         = x_end - 1,
-      treatment = fct_relevel(treatment, lvls)
+      treatment = fct_relevel(treatment, lvls),
+      cluster   = gns[name],
+      name      = fct_relevel(name, genes)
     )
   
   # Format data for plotting lines
@@ -2210,7 +2232,7 @@ create_gene_plots <- function(df_in, gns, deg_data = degs, color = "orange",
     mutate(trt_end = lvls[x_end], trt_start = lvls[x]) %>%
     
     dplyr::select(
-      name, treatment, subtype,
+      name, treatment, subtype, cluster,
       x, x_end, trt_start, trt_end,
       max_pval
     ) %>%
@@ -2223,22 +2245,19 @@ create_gene_plots <- function(df_in, gns, deg_data = degs, color = "orange",
     
     mutate(
       significant = as.character(!is.na(max_pval)),
-      significant = fct_relevel(significant, c("TRUE", "FALSE"))
+      significant = fct_relevel(significant, c("TRUE", "FALSE")),
+      name        = fct_relevel(name, genes)
     ) %>%
     group_by(subtype) %>%
     filter(any(significant == "TRUE")) %>%
     ungroup()
   
   # Create plots
-  n_clrs <- length(lvls) - 1
-  clrs   <- 0.75 / n_clrs
-  clrs   <- 0.25 + (seq_along(lvls)[1:n_clrs] * clrs)
-  clrs   <- 1 - c(0.25, clrs)
-  clrs   <- lighten(color, clrs)
+  aspect <- length(genes) / n_distinct(plt_dat$name) * 0.9
   
   res <- plt_dat %>%
     filter(subtype %in% unique(ln_dat$subtype)) %>%
-    ggplot(aes(treatment, value, color = treatment)) +
+    ggplot(aes(treatment, value, color = cluster)) +
     
     geom_errorbar(
       aes(x = treatment, ymin = q1, ymax = q3),
@@ -2255,11 +2274,10 @@ create_gene_plots <- function(df_in, gns, deg_data = degs, color = "orange",
         linetype = significant
       ),
       linewidth = 0.75,
-      data  = ln_dat,
-      color = color
+      data  = ln_dat
     ) +
     
-    facet_grid(name ~ subtype, switch = "both", scales = "free_y") +
+    facet_grid(name ~ subtype, switch = "y", scales = "free_y") +
     
     scale_linetype_manual(values = c("TRUE" = 1, "FALSE" = 3)) +
     
@@ -2270,48 +2288,47 @@ create_gene_plots <- function(df_in, gns, deg_data = degs, color = "orange",
       expand = expansion(c(0.2, 0.05))
     ) +
     
+    scale_x_discrete(labels = c(mock = "m", `8hpi` = "8h", `24hpi` = "24h")) +
+    
     guides(
-      color = guide_legend(title.position = "top", title.hjust = 0.5),
+      # color = guide_legend(title.position = "top", title.hjust = 0.5),
+      color = "none",
       linetype = guide_legend(title.position = "top", title.hjust = 0.5)
     ) +
     
     djvdj_theme() +
     theme(
+      aspect.ratio    = aspect,
       legend.position = "bottom",
       strip.clip      = "off",
       strip.placement = "outside",
-      axis.text.x     = element_blank(),
-      axis.ticks.x    = element_blank(),
       axis.title      = element_blank()
+      # axis.text.x     = element_blank(),
+      # axis.ticks.x    = element_blank(),
     )
   
   res
 }
 
 # Example genes to plot
-# gns <- c("Bst2", "Irf7", "Cxcl9", "Cxcl10")
-# gns <- c(
-#   "Irf7", "Ifi44", "Iigp1", "Bst2", "Zbp1",
-#   "Cxcl9", "Cxcl10"
-# )
-# gns <- go$`so_8-up`@compareClusterResult %>%
-gns <- go$`so_merge-up`@compareClusterResult %>%
-  filter(
-    Description %in% clusters$`so_8-up`$clusters$Description,
-    p.adjust < 0.05, qvalue < 0.2, Count >= 3
-  ) %>%
+gns <- go$`so_8-up`@compareClusterResult %>%
   as_tibble() %>%
-  left_join(clusters$`so_8-up`$clusters, by = "Description") %>%
+  right_join(go_heat$`so_8-up`$terms, by = "Description") %>%
   mutate(geneID = str_split(geneID, "/")) %>%
   unnest(geneID) %>%
   group_by(geneID, cluster) %>%
   summarize(n = n_distinct(Cluster), .groups = "drop") %>%
+  distinct(geneID, .keep_all = TRUE) %>%
   arrange(cluster, desc(n)) %>%
   group_by(cluster) %>%
-  dplyr::slice(1:10) %>%
+  dplyr::slice(1:3) %>%
   ungroup() %>%
-  head(5) %>%
-  pull(geneID)
+  head(5)
+
+gns <- set_names(
+  as.character(gns$cluster),
+  gns$geneID
+)
 
 # Format gene expression data
 trts <- c("mock", "8hpi", "24hpi")
@@ -2319,10 +2336,10 @@ trts <- c("mock", "8hpi", "24hpi")
 gene_dat <- list("8hpi" = so_8, "24hpi" = so_24) %>%
   imap_dfr(~ {
     .x %>%
-      FetchData(c("subtype", "orig.ident", "treatment", "rep", gns)) %>%
+      FetchData(c("subtype", "orig.ident", "treatment", "rep", names(gns))) %>%
       as_tibble(rownames = ".cell_id") %>%
       mutate(tm = .y) %>%
-      pivot_longer(all_of(gns))
+      pivot_longer(all_of(names(gns)))
   }) %>%
   filter(
     !subtype %in% c("other", "unassigned"),
@@ -2339,7 +2356,7 @@ ln_trts <- c("8hpi" = "so_8-up", "24hpi" = "so_merge-up")
 deg_data <- ln_trts %>%
   imap_dfr(~ {
     degs[[.x]] %>%
-      dplyr::filter(gene %in% gns) %>%
+      dplyr::filter(gene %in% names(gns)) %>%
       dplyr::mutate(treatment = .y) %>%
       dplyr::select(gene, treatment, subtype, max_pval)
   })
@@ -2352,271 +2369,48 @@ typs <- deg_data %>%
   pull(subtype)
 
 # Create plots
-ln_plot <- gene_dat %>%
+examples_8 <- gene_dat %>%
   create_gene_plots(
     gns        = gns,
     deg_data   = deg_data,
-    # cell_types = unique(go$`so_8-up`@compareClusterResult$Cluster),
     cell_types = typs,
     lvls       = trts,
-    color = "orange"
-  )
-
-```
-
-```{r "CD"}
-
-plot_grid(
-  # go_heat$`so_8-up`, ln_plot,
-  go_heat$`so_merge-up`, ln_plot,
-  nrow = 1,
-  align = "h",
-  axis  = "tb"
-)
-
-```
-
-### 24 hpi
-
-```{r "24 hpi DEGs"}
-# Identify 8 hpi DEGs
-Idents(so_24) <- so_24$treatment
-
-typs <- get_cell_types(so_24, "subtype", "orig.ident")
-typs <- typs[!typs %in% c("other", "unassigned")]
-
-deg_dir <- here("results/tables/24hpi_subtype_chikv-up_markers.tsv")
-
-if (!file.exists(deg_dir)) {
-  degs <- typs %>%
-    map_dfr(~ {
-      so_24 %>%
-        subset(subtype == .x) %>%
-        FindConservedMarkers(
-          ident.1         = "CHIKV",
-          ident.2         = "mock",
-          grouping.var    = "rep",
-          logfc.threshold = 0.25,
-        ) %>%
-        mutate(subtype = .x) %>%
-        as_tibble(rownames = "gene")
-    })
-  
-  degs %>%
-    write_tsv(deg_dir)
-  
-} else {
-  degs <- read_tsv(deg_dir)
-}
-
-# Filter DEGs
-reps     <- unique(so_24$rep)
-fc_clmns <- str_c(reps, "_avg_log2FC")
-
-top_degs <- degs %>%
-  filter(
-    # if_all(all_of(fc_clmns), ~ .x > 0.5),
-    max_pval < 0.05
-  ) %>%
-  arrange(subtype, max_pval) %>%
-  split(.$subtype) %>%
-  map(pull, gene) %>%
-  map(head, 200)
-```
-
-```{r "24 hpi GO"}
-# GO terms
-# for plotting include all terms regardless of significance
-go_dir <- here("results/tables/24hpi_subtype_chikv-up_go")
-
-if (!file.exists(str_c(go_dir, ".qs"))) {
-  go <- top_degs %>%
-    imap(~ {
-      bkgd <- so_24 %>%
-        subset(subtype == .y)
-      
-      bkgd <- bkgd@assays$RNA@data %>%
-        rowMeans() %>%
-        sort(decreasing = TRUE) %>%
-        head(10000) %>%
-        names()
-      
-      .x %>%
-        enrichGO(
-          keyType      = "SYMBOL",
-          OrgDb        = org.Mm.eg.db,
-          universe     = bkgd,
-          maxGSSize    = 1000,
-          minGSSize    = 10,
-          pvalueCutoff = 1.1,
-          qvalueCutoff = 1.1,
-          ont          = "BP"
-        ) %>%
-        clusterProfiler::simplify()
-    }) %>%
-    merge_result()
-  
-  go %>%
-    qsave(str_c(go_dir, ".qs"))
-  
-  go@compareClusterResult %>%
-    write_tsv(str_c(go_dir, ".tsv"))
-  
-} else {
-  go <- qread(str_c(go_dir, ".qs"))
-}
-
-go <- go %>%
-  filter(
-    as.numeric(map_chr(str_split(BgRatio, "/"), ~ .x[1])) < 750
-  )
-
-# Filter GO terms
-top_terms <- go@compareClusterResult %>%
-  dplyr::filter(p.adjust < 0.05, qvalue < 0.2, Count >= 10) %>%
-  group_by(Description) %>%
-  summarize(
-    n        = n_distinct(Cluster),
-    p.adjust = mean(p.adjust),
-    qvalue   = mean(qvalue)
-  ) %>%
-  arrange(desc(n))
-```
-
-```{r "GO clusters"}
-# Calculate similarity metric for top terms
-# only include significant terms shared with at least two cell types
-go_dist <- go %>%
-  filter(p.adjust < 0.05, qvalue < 0.2) %>%
-  pairwise_termsim() %>%
-  .@termsim
-
-clst_terms <- top_terms %>%
-  filter(n > 1) %>%
-  pull(Description)
-
-# Fill in upper triangle of matrix and filter terms
-go_dist <- go_dist %>%
-  fill_termsim(keep = clst_terms)
-
-# Cluster terms
-# use ward.D method to avoid overlapping ancestor nodes of each group
-hc <- stats::hclust(
-  stats::as.dist(1 - go_dist),
-  method = "ward.D"
-)
-
-clsts <- stats::cutree(hc, 2)
-
-clsts <- tibble(
-  Description = names(clsts),
-  cluster     = unname(clsts)
-)
-```
-
-```{r "GO heatmaps"}
-# GO terms to plot
-n_terms <- 5
-n_seq   <- seq_len(n_terms)
-
-heat_terms <- top_terms %>%
-  right_join(clsts, by = "Description") %>%
-  arrange(cluster, desc(n), p.adjust) %>%
-  group_by(cluster) %>%
-  mutate(
-    n_terms = n_distinct(Description),
-    mean_p  = mean(p.adjust)
-  ) %>%
-  dplyr::slice(n_seq) %>%
-  ungroup() %>%
-  arrange(cluster, p.adjust)
-
-# Data for heatmap
-heat_dat <- go@compareClusterResult %>%
-  filter(Description %in% heat_terms$Description) %>%
-  left_join(clsts, by = "Description") %>%
-  mutate(Description = fct_relevel(Description, rev(heat_terms$Description))) %>%
-  arrange(Description) %>%
-  mutate(
-    Description = str_trunc(as.character(Description), width = 70, side = "right"),
-    Description = str_wrap(Description, width = 40),
-    Description = fct_inorder(Description)
-  )
-  
-p_dat <- heat_dat %>%
-  dplyr::filter(p.adjust < 0.05, qvalue < 0.2)
-
-# Create heatmap
-ht_plot <- heat_dat %>%
-  ggplot(aes(Cluster, Description, fill = as.character(cluster), alpha = -log10(p.adjust))) +
-  geom_tile() +
-  geom_point(
-    aes(fill = NULL, alpha = NULL),
-    data = p_dat,
-    shape = 5,
-    show.legend = FALSE
-  ) +
-  guides(fill = "none") +
-  facet_wrap(
-    ~ cluster, ncol = 1, scales = "free_y",
-    labeller = as_labeller(c("1" = "Defense response", "2" = "Regulation of cytotoxicity"))
-    # strip.position = "left"
-  ) +
-  scale_alpha_continuous(range = c(0, 1)) +
-  # scale_fill_manual(values = c("lightblue", "orange", "red")) +
-  guides(alpha = guide_legend(
-    label.position = "bottom",
-    keyheight      = unit(7, "pt"),
-    title          = "-log10(p-value)",
-    title.position = "top"
-  )) +
-  djvdj_theme() +
-  theme(
-    legend.position = "bottom",
-    legend.title    = element_text(hjust = 0.5),
-    # strip.placement = "outside",
-    aspect.ratio    = n_terms / n_distinct(heat_dat$Cluster),
-    axis.title      = element_blank(),
-    axis.text.x     = element_text(angle = 45, hjust = 1)
+    clrs       = clrs_8
   )
 ```
 
-```{r "GO examples"}
+```{r "24hpi examples"}
+
 # Example genes to plot
-# gns <- c("Bst2", "Irf7", "Cxcl9", "Cxcl10")
-gns <- go@compareClusterResult %>%
-  filter(
-    Description %in% heat_terms$Description,
-    p.adjust < 0.05, qvalue < 0.2, Count >= 3
-  ) %>%
+gns <- go$`so_merge-up`@compareClusterResult %>%
   as_tibble() %>%
-  left_join(clsts, by = "Description") %>%
+  right_join(go_heat$`so_merge-up`$terms, by = "Description") %>%
   mutate(geneID = str_split(geneID, "/")) %>%
   unnest(geneID) %>%
   group_by(geneID, cluster) %>%
   summarize(n = n_distinct(Cluster), .groups = "drop") %>%
+  distinct(geneID, .keep_all = TRUE) %>%
   arrange(cluster, desc(n)) %>%
   group_by(cluster) %>%
-  dplyr::slice(1:4) %>%
+  dplyr::slice(1:3) %>%
   ungroup() %>%
-  # head(7) %>%
-  pull(geneID)
+  head(5)
 
-# gns <- c(
-#   "Irf7", "Ifi44", "Iigp1", "Bst2", "Zbp1",
-#   "Cxcl9", "Cxcl10"
-# )
+gns <- set_names(
+  as.character(gns$cluster),
+  gns$geneID
+)
 
-# Data for heatmaps
+# Format gene expression data
 trts <- c("mock", "8hpi", "24hpi")
 
-plt_dat <- list("8hpi" = so_8, "24hpi" = so_24) %>%
+gene_dat <- list("8hpi" = so_8, "24hpi" = so_24) %>%
   imap_dfr(~ {
     .x %>%
-      FetchData(c("subtype", "orig.ident", "treatment", "rep", gns)) %>%
+      FetchData(c("subtype", "orig.ident", "treatment", "rep", names(gns))) %>%
       as_tibble(rownames = ".cell_id") %>%
       mutate(tm = .y) %>%
-      pivot_longer(all_of(gns))
+      pivot_longer(all_of(names(gns)))
   }) %>%
   filter(
     !subtype %in% c("other", "unassigned"),
@@ -2625,114 +2419,86 @@ plt_dat <- list("8hpi" = so_8, "24hpi" = so_24) %>%
   mutate(
     treatment = ifelse(treatment == "CHIKV", tm, treatment),
     treatment = fct_relevel(treatment, trts),
-    name      = fct_relevel(name, gns)
   )
 
-# Line graphs
-dat <- plt_dat %>%
-  filter(subtype %in% go@compareClusterResult$Cluster) %>%
-  group_by(subtype, treatment, name) %>%
-  filter(n() > 10) %>%
-  summarize(
-    n       = n(),
-    sd      = sd(value),
-    value   = mean(value),
-    err     = qt(0.975, df = n - 1) * (sd / sqrt(n)),  # 95% CI
-    .groups = "drop"
-  ) %>%
-  mutate(treatment = as.numeric(fct_relevel(treatment, trts)))
+# Format table of DEGs
+ln_trts <- c("8hpi" = "so_8-up", "24hpi" = "so_merge-up")
 
-p_dat <- plt_dat %>%
-  filter(subtype %in% go@compareClusterResult$Cluster) %>%
-  dplyr::select(treatment, subtype, name, value) %>%
-  group_by(subtype, treatment, name) %>%
-  filter(n() > 10) %>%
-  ungroup()
+deg_data <- ln_trts %>%
+  imap_dfr(~ {
+    degs[[.x]] %>%
+      dplyr::filter(gene %in% names(gns)) %>%
+      dplyr::mutate(treatment = .y) %>%
+      dplyr::select(gene, treatment, subtype, max_pval)
+  })
 
-ln_dat <- c("mock", "8hpi") %>%
-  map_dfr(~ {
-    p_trts <- c(.x, trts[match(.x, trts) + 1])
-    
-    p_dat %>%
-      filter(treatment %in% p_trts) %>%
-      group_by(subtype, name) %>%
-      mutate(
-        p = ifelse(
-          all(p_trts %in% treatment),
-          wilcox.test(value[treatment == p_trts[1]], value[treatment == p_trts[2]])$p.value,
-          as.numeric(NA)
-        )
-      ) %>%
-      ungroup() %>%
-      mutate(
-        p = p.adjust(p, method = "bonferroni"),
-        p = ifelse(p < 0.05, "p < 0.05", "ns")
-      ) %>%
-      distinct(treatment, subtype, name, p) %>%
-      filter(!is.na(p))
-  }) %>%
-  mutate(treatment = as.numeric(fct_relevel(treatment, trts))) %>%
-  left_join(dat, by = c("subtype", "treatment", "name")) %>%
+typs <- deg_data %>%
   group_by(subtype) %>%
-  filter(any(p == "p < 0.05"))
-  
-ln_plot <- dat %>%
-  filter(subtype %in% ln_dat$subtype) %>%
-  ggplot(aes(treatment, value, alpha = treatment)) +
-  geom_point(color = "orange") +
-  geom_line(
-    aes(linetype = p),
-    data  = ln_dat,
-    color = "black", alpha = 1
-  ) +
-  geom_errorbar(
-    aes(x = treatment, ymin = value - err, ymax = value + err),
-    color = "black",
-    alpha = 1,
-    width = 0.07
-  ) +
-  facet_grid(name ~ subtype, switch = "both", scales = "free_y") +
-  scale_alpha_continuous(range = c(0.25, 1)) +
-  scale_linetype_manual(values = c(`p < 0.05` = 1, ns = 2)) +
-  scale_y_continuous(breaks = (function(x) return(c(0, floor(max(x)))))) +
-  # scale_y_continuous(breaks = breaks_pretty(n = 2)) +
-  
-  guides(linetype = guide_legend(title = NULL), alpha = "none") +
-  
-  djvdj_theme() +
-  theme(
-    legend.position = "bottom",
-    strip.clip   = "off",
-    strip.placement = "outside",
-    axis.text.x  = element_blank(),
-    axis.ticks.x = element_blank(),
-    axis.title   = element_blank()
-  )
+  summarize(n_genes = n(), .groups = "drop") %>%
+  arrange(desc(n_genes)) %>%
+  head(8) %>%
+  pull(subtype)
 
-# # Boxplots
-# plt_dat %>%
-#   filter(treatment != "24hpi") %>%
-#   ggplot(aes(subtype, value, fill = treatment)) +
-#   geom_boxplot(
-#     outlier.size  = 0.1,
-#     outlier.alpha = 1,
-#     position      = position_dodge2(preserve = "single")
-#   ) +
-#   facet_wrap(~ name) +
-#   djvdj_theme() +
-#   theme(
-#     axis.text.x = element_text(angle = 45, hjust = 1)
-#   )
+# Create plots
+examples_24 <- gene_dat %>%
+  create_gene_plots(
+    gns        = gns,
+    deg_data   = deg_data,
+    cell_types = typs,
+    lvls       = trts,
+    clrs       = clrs_24
+  )
 ```
 
-```{r "CD"}
+```{r "GO figures", fig.width = 10.5, fig.height = 8.5}
 
-plot_grid(
-  ht_plot, ln_plot,
-  nrow = 1,
-  align = "h",
-  axis  = "tb"
+# # Create final figure
+# left <- plot_grid(
+#   go_heat$`so_8-up`$heatmap,
+#   go_heat$`so_merge-up`$heatmap,
+#   labels = c("C", "E"),
+#   label_size = ttl_pt2 * 1.5,
+#   ncol   = 1,
+#   align  = "v",
+#   axis   = "r"
+# )
+# 
+# right <- plot_grid(
+#   examples_8, examples_24,
+#   labels = c("D", "F"),
+#   label_size = ttl_pt2 * 1.5,
+#   ncol   = 1,
+#   align  = "v",
+#   axis   = "l"
+# )
+# 
+# plot_grid(
+#   left, right,
+#   nrow = 1
+# )
+
+top <- plot_grid(
+  go_heat$`so_8-up`$heatmap, examples_8,
+  labels = c("C", "D"),
+  label_size = ttl_pt2 * 1.5,
+  hjust  = 0.01,
+  vjust  = 0.98,
+  nrow   = 1,
+  align  = "h",
+  axis   = "tb"
 )
+
+bot <- plot_grid(
+  go_heat$`so_merge-up`$heatmap, examples_24,
+  labels = c("E", "F"),
+  label_size = ttl_pt2 * 1.5,
+  hjust  = 0.01,
+  nrow   = 1,
+  align  = "h",
+  axis   = "tb"
+)
+
+plot_grid(top, bot, ncol = 1)
 
 ```
 
