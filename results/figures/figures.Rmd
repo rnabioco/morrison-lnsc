@@ -57,6 +57,7 @@ library(msigdbr)
 library(org.Mm.eg.db)
 library(GOSemSim)
 library(biomaRt)
+library(ggtree)
 
 # tidyverse
 library(tidyverse)
@@ -767,8 +768,12 @@ get_clusters <- function(go_in, k = 3, pval = 0.05, qval = 0.2, n_overlap = 3,
     ) %>%
     arrange(desc(n), p.adjust) %>%
     dplyr::filter(n >= n_shared)
+
+  # Set number of clusters
+  # must average > 2 terms per cluster
+  if (nrow(top_terms) < 2) return(NULL)
   
-  if (length(top_terms$Description) < 2) return(NULL)
+  k <- min(k, floor(nrow(top_terms) / 2))
   
   # Calculate similarity metric for top terms
   # fill in upper triangle of matrix and filter terms
@@ -785,11 +790,11 @@ get_clusters <- function(go_in, k = 3, pval = 0.05, qval = 0.2, n_overlap = 3,
     method = "ward.D"
   )
   
-  clsts <- stats::cutree(hc, k)
+  clst_obj <- stats::cutree(hc, k)
   
   clsts <- tibble(
-    Description = names(clsts),
-    cluster     = unname(clsts)
+    Description = names(clst_obj),
+    cluster     = unname(clst_obj)
   )
   
   # Format output object
@@ -807,7 +812,8 @@ get_clusters <- function(go_in, k = 3, pval = 0.05, qval = 0.2, n_overlap = 3,
   
   res <- list(
     clusters = res,
-    object   = hc
+    object   = hc,
+    clusters_object = clst_obj
   )
   
   res
@@ -829,17 +835,19 @@ get_clusters <- function(go_in, k = 3, pval = 0.05, qval = 0.2, n_overlap = 3,
 #' @param qval q-value cutoff for marking significant terms
 #' @param n_overlap Minimum number of genes needed to overlap the term for it to
 #' be marked as significant
+#' @param n_genes Minimum number of DEGs for cell type to be included on plot
 #' @param clrs Colors to use for each cluster
 #' @param n_col Number of columns to use for organizing facets (each cluster is
 #' plotted as a separate facet)
 #' @param cluster_labels Vector containing descriptive labels for each cluster
 create_go_heatmap <- function(df_in, go_in, n_clusters = 2, n_terms = 5,
-                              pval = 0.05, qval = 0.2, n_overlap = 3,
+                              pval = 0.05, qval = 0.2, n_overlap = 3, n_genes = 3,
                               clrs = c("orange", "lightblue", "red"), n_col = 1,
-                              cluster_labels = NULL) {
+                              free_y = FALSE, cluster_labels = NULL) {
   
-  # GO terms to plot
+  # Top GO terms to plot
   # df_in includes combined GO terms identified across all cell types
+  # sort to show shared terms at the top, sort by mean adjusted p-value for term
   top_clusters <- df_in$cluster %>%
     table() %>%
     sort(decreasing = TRUE) %>%
@@ -850,29 +858,92 @@ create_go_heatmap <- function(df_in, go_in, n_clusters = 2, n_terms = 5,
   
   terms <- df_in %>%
     dplyr::filter(cluster %in% top_clusters) %>%
-    arrange(cluster, desc(n), p.adjust) %>%
+    mutate(shared = n > 1) %>%
+    # arrange(cluster, desc(n), p.adjust) %>%
+    arrange(cluster, desc(shared), p.adjust) %>%
     group_by(cluster) %>%
     dplyr::slice(n_seq) %>%
     ungroup()
   
-  cluster_ids <- terms %>%
-    dplyr::select(Description, cluster)
+  n_terms <- terms %>%
+    group_by(cluster) %>%
+    summarize(n = n_distinct(Description), .groups = "drop") %>%
+    pull(n) %>%
+    max()
   
   # Data for heatmap
+  cluster_ids <- df_in %>%
+    dplyr::select(Description, cluster)
+  
+  agg_lab <- "Total Overlap"
+  lvls    <- c(agg_lab, rev(terms$Description))
+  
   dat <- go_in@compareClusterResult %>%
-    filter(Description %in% terms$Description) %>%
+    as_tibble() %>%
     left_join(cluster_ids, by = "Description") %>%
-    mutate(Description = fct_relevel(Description, rev(terms$Description))) %>%
+    filter(cluster %in% top_clusters) %>%
+    separate(GeneRatio, into = c("n_ovlp", "tot_genes"), sep = "/", convert = TRUE) %>%
+    mutate(GeneRatio = n_ovlp / tot_genes)
+  
+  # Calculate aggregated fraction overlap
+  # only show cell types with >= 10 overlapping genes
+  agg_dat <- dat %>%
+    mutate(geneID = str_split(geneID, "/")) %>%
+    group_by(Cluster, cluster, tot_genes) %>%
+    summarize(
+      tot_ovlp = n_distinct(reduce(geneID, c)),
+      .groups  = "drop"
+    ) %>%
+    mutate(
+      GeneRatio   = tot_ovlp / tot_genes,
+      Description = agg_lab
+    ) %>%
+    filter(tot_genes >= n_genes)
+  
+  typ_lvls <- agg_dat %>%
+    arrange(desc(GeneRatio)) %>%
+    mutate(Cluster = fct_inorder(as.character(Cluster))) %>%
+    pull(Cluster) %>%
+    levels() 
+  
+  dat <- dat %>%
+    filter(
+      Description %in% terms$Description,
+      Cluster %in% typ_lvls
+    ) %>%
+    bind_rows(agg_dat) %>%
+    mutate(Description = fct_relevel(Description, lvls)) %>%
     arrange(Description) %>%
     mutate(
       Description = str_trunc(as.character(Description), width = 70, side = "right"),
       Description = str_wrap(Description, width = 40),
-      Description = fct_inorder(Description)
-    ) %>%
-    rowwise() %>%
-    mutate(GeneRatio = eval(parse(text = GeneRatio))) %>%
-    ungroup()
+      Description = fct_inorder(Description),
+      Cluster     = fct_relevel(Cluster, typ_lvls)
+    )
   
+  ## THIS COULD BE USED TO CALCULATE COMBINED SIGNIFICANCE
+  # Fill in missing values
+  # these are terms with 0 overlapping genes for the cell type
+  # assign p-value of 1 and gene ratio of 0
+  # dat <- dat %>%
+  #   complete(
+  #     crossing(Description, Cluster),
+  #     fill = list(GeneRatio = 0, p.adjust = 1)
+  #   )
+  # 
+  # dat %>%
+  #   group_by(Cluster) %>%
+  #   summarize(
+  #     n = length(p.adjust[p.adjust < 0.05]),
+  #     frac = n / n(),
+  #     
+  #     GeneRatio = mean(GeneRatio),
+  #     meanp     = (metap::meanp(p.adjust))$p,
+  #     fisher    = (metap::sumlog(p.adjust))$p,
+  #     wilk      = (metap::maximump(p.adjust))$p,
+  #     p.adjust  = mean(p.adjust)
+  #   )
+    
   # Data for significant terms for each cell type
   # this differs from df_in, since df_in does not contain p-values for each
   # cell type, just mean p-values summarizing overall significance across
@@ -883,6 +954,14 @@ create_go_heatmap <- function(df_in, go_in, n_clusters = 2, n_terms = 5,
   
   # Create heatmap
   # ggplot(aes(Cluster, Description, fill = as.character(cluster), alpha = -log10(p.adjust))) +
+  agg_fn <- function(x) {
+    new_agg <- str_replace_all(agg_lab, " ", "~")
+    new_agg <- str_c("bold(", new_agg, ")")
+    
+    x[x == agg_lab] <- parse(text = new_agg)
+    x
+  }
+  
   res <- dat %>%
     ggplot(aes(Cluster, Description, fill = as.character(cluster), alpha = GeneRatio)) +
     geom_tile() +
@@ -895,21 +974,21 @@ create_go_heatmap <- function(df_in, go_in, n_clusters = 2, n_terms = 5,
       stroke = 0.75
       
     ) +
-    facet_wrap(
-      ~ cluster, ncol = n_col, scales = "free_y",
-      labeller = cluster_labels %||% "label_value"
-    ) +
     
-    scale_alpha_continuous(range = c(0, 1)) +
+    geom_hline(yintercept = 1.5, size = 1.5, color = "white") +
+    
+    scale_alpha_continuous(range = c(0, 1), n.breaks = 4) +
     scale_color_manual(values = "black") +
     scale_fill_manual(values = clrs) +
+    scale_y_discrete(labels = agg_fn) +
     guides(
       alpha = guide_legend(
         keyheight      = unit(7, "pt"),
         label.position = "bottom",
         order          = 1,
-        title          = "Fraction overlap",
-        title.position = "top"
+        title          = "Fraction Overlap",
+        title.position = "top",
+        nrow           = 1
       ),
       color = guide_legend(
         title = NULL,
@@ -923,10 +1002,26 @@ create_go_heatmap <- function(df_in, go_in, n_clusters = 2, n_terms = 5,
     theme(
       legend.position = "bottom",
       legend.title    = element_text(hjust = 0.5),
-      aspect.ratio    = n_terms / n_distinct(dat$Cluster),
       axis.title      = element_blank(),
-      axis.text.x     = element_text(angle = 45, hjust = 1)
+      axis.text.x     = element_text(angle = 45, hjust = 1),
+      strip.clip      = "off"
     )
+  
+  if (free_y) {
+    res <- res +
+      facet_grid(
+        rows = "cluster",
+        scales = "free_y", space = "free_y",
+        labeller = cluster_labels %||% "label_value"
+      )
+  } else {
+    res <- res +
+      facet_wrap(
+        ~ cluster, ncol = n_col, scales = "free_y",
+        labeller = cluster_labels %||% "label_value"
+      ) +
+      theme(aspect.ratio = n_terms / n_distinct(dat$Cluster))
+  }
   
   res <- list(
     heatmap = res,
@@ -1114,6 +1209,7 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
     theme(
       aspect.ratio    = aspect,
       legend.position = "bottom",
+      legend.title    = element_text(hjust = 0.5),
       strip.clip      = "off",
       strip.placement = "outside",
       axis.title      = element_blank()
@@ -1128,6 +1224,9 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
 so_8_dir  <- here(params$so_dir, "so_8.qs")
 so_24_dir <- here(params$so_dir, "so_24.qs")
 
+lec_cell_types <- "Endothelial cells"
+fib_cell_types <- c("Fibroblasts", "Stromal cells")
+
 # Replace this with setup.Rmd that has code used to process each sample
 if (!file.exists(so_8_dir) || !file.exists(so_24_dir)) {
   so_8  <- read_rds(file.path(params$orig_so_dir, "2021-07-16/sobjs/so.rds"))
@@ -1137,9 +1236,6 @@ if (!file.exists(so_8_dir) || !file.exists(so_24_dir)) {
   # Add PvCs to cell types
   # This is based on clustifyr results using ref_lymphnodestromal, and Pecam1,
   # Pdpn, Itga7, and Acta2 expression
-  lec_cell_types <- "Endothelial cells"
-  fib_cell_types <- c("Fibroblasts", "Stromal cells")
-  
   so_24 <- so_24 %>%
     mutate_meta(
       mutate,
@@ -1240,8 +1336,8 @@ so_24 <- qread(so_24_dir)
 so_merge_df <- bind_rows(so_8@meta.data, so_24@meta.data)
 
 # Load LEC objects
-# so_lec_8  <- read_rds(file.path(params$orig_so_dir, "2021-07-16/sobjs/so_lec.rds"))
-# so_lec_24 <- read_rds(file.path(params$orig_so_dir, "2021-01-08/sobjs/so_lec.rds"))
+so_lec_8  <- read_rds(file.path(params$orig_so_dir, "2021-07-16/sobjs/so_lec.rds"))
+so_lec_24 <- read_rds(file.path(params$orig_so_dir, "2021-01-08/sobjs/so_lec.rds"))
 
 # Set levels
 sam_lvls   <- unique(so_24$orig.ident)
@@ -2077,6 +2173,8 @@ h_dat <- list("8hpi" = so_lec_8, "24hpi" = so_lec_24) %>%
       )
   })
 
+rm(so_lec_8, so_lec_24)
+
 h_mat <- h_dat %>%
   map(~ {
     .x %>%
@@ -2355,6 +2453,17 @@ feats %>%
 
 ## Figure 5
 
+Differentially expressed genes were identified for each cell type for mock vs 8 hpi and 8 hpi vs 24 hpi. Genes were considered upregulated if the log2 fold change was >0.15 for 8 hpi and >0.25 for 24 hpi for all replicates and the maximum p-value for all replicates was <0.05.
+
+Gene ontology terms (biological process) were then identified for upregulated genes for each cell type. Terms were filtered to only include those with an adjusted p-value <0.05 and at least 3 or 10 upregulated genes overlapping the term for the 8 hpi and 24 hpi timepoints, respectively. Terms identified for all cell types were combined together and clustered into three modules based on similarity.
+
+A.  UMAP projection shows cells from the 8 hpi and 24 hpi timepoints, cells are colored by sample.
+B.  UMAP projection shows cells from the 8 hpi and 24 hpi timepoints, cells are colored by cell type.
+C.  The 8 hpi timeopoint shows upregulation of genes associated with an interferon-beta response. The fraction of upregulated genes overlapping terms from the primary gene ontology module is shown for the 8 hpi timepoint.
+D.  Top upregulated genes identified for the terms shown in A are plotted. Points show the median expression for the mock (m), 8 hpi (8h), and 24 hpi (24h) samples, grey bars show the interquartile range. A solid line indicates that the gene is significantly upregulated between the samples.
+E.  The fraction of upregulated genes overlapping terms from the primary gene ontology modules is shown for the 24 hpi timepoint, as described in C.
+F.  Top upregulated genes identified for the terms shown in E are plotted as described in D.
+
 ```{r "DEGs"}
 # Create object to compare CHIKV 24 hpi with 8 hpi
 top_reps <- as.character(so_24$rep) %>%
@@ -2432,6 +2541,8 @@ degs <- deg_args %>%
     d
   }) %>%
   flatten()
+
+rm(so_8_chikv, so_24_chikv)
 ```
 
 ```{r "GO"}
@@ -2476,9 +2587,8 @@ so_8_re <- "^(so_8-|so_[0-9]+_chikv)"
 clusters <- go %>%
   imap(~ {
     ovlp <- ifelse(grepl(so_8_re, .y), 3, 10)
-    k    <- ifelse(grepl(so_8_re, .y), 2, 3)
     
-    get_clusters(.x, k = k, n_overlap = ovlp)
+    get_clusters(.x, k = 3, n_overlap = ovlp, n_shared = 1)
   }) %>%
   discard(is.null)
 
@@ -2527,16 +2637,33 @@ sim_heatmap <- cluster_sim %>%
 ```
 
 ```{r "GO heatmaps"}
-# pval, qval, n_overlap cutoffs should match those used for clustering
+# # Cluster titles
+# clst_matches <- cluster_sim %>%
+#   filter(var1 != var2) %>%
+#   group_by(var1) %>%
+#   filter(
+#     sim > 0.6,
+#     sim == max(sim[sim < 1])
+#   ) %>%
+#   rowwise() %>%
+#   mutate(matches = list(sort(as.character(c(var1, var2))))) %>%
+#   pull(matches) %>%
+#   unique()
+
+ttls <- as_labeller(c(`1` = "response to interferon-beta", `2` = "response to cytokine stimulus"))
+
+# Cluster colors
 clrs_8  <- c(`1` = "#E69F00", `2` = "#56B4E9")
 clrs_24 <- c(`1` = "#D7301F", `2` = "#6A51A3")
-ttls    <- as_labeller(c(`1` = "defense response", `2` = "viral response"))
 
+# Create heatmaps
+# pval, qval, n_overlap cutoffs should match those used for clustering
 go_heat <- clusters %>%
   imap(~ {
     go_in  <- go[[.y]]
     ovlp   <- ifelse(grepl(so_8_re, .y), 3, 10)
     n_clst <- ifelse(grepl(so_8_re, .y), 1, 2)
+    n_gns  <- ifelse(grepl(so_8_re, .y), 10, 20)
     
     if (grepl("^so_8-", .y)) clrs <- clrs_8
     else                     clrs <- clrs_24
@@ -2545,11 +2672,18 @@ go_heat <- clusters %>%
       create_go_heatmap(
         go_in      = go_in,
         n_overlap  = ovlp,
+        n_genes    = n_gns,
         n_clusters = n_clst,
         clrs       = clrs,
         cluster_labels = ttls
       )
   })
+
+# # Calculate frequency of words for each GO cluster
+# clusters$`so_merge-up`$clusters %>%
+#   filter(cluster == 2) %>%
+#   pull(ID) %>%
+#   simplifyEnrichment::keyword_enrichment_from_GO()
 ```
 
 ```{r "8hpi examples"}
@@ -2613,10 +2747,9 @@ examples_24 <- create_gene_plots(
   cell_types = 8,
   clrs       = clrs_24
 )
-
 ```
 
-```{r "GO figures", fig.width = 10.5, fig.height = 8.5}
+```{r "GO figures", fig.width = 12, fig.height = 9}
 
 # # Create final figure
 # left <- plot_grid(
@@ -2664,11 +2797,169 @@ bot <- plot_grid(
   axis   = "tb"
 )
 
-plot_grid(top, bot, ncol = 1, rel_heights = c(0.6, 1))
+plot_grid(top, bot, ncol = 1, rel_heights = c(0.68, 1))
 
 ```
 
-```{r "GO module scores"}
+<br>
+
+### Extended GO analysis {.tabset .tabset-pills}
+
+```{r "EXPANDED FIGURES", fig.width = 12, fig.height = 19, results = "asis"}
+# Split GO objects by cell type
+go_type <- go %>%
+  imap(~ {
+    obj  <- .x
+    typs <- unique(obj@compareClusterResult$Cluster)
+    base <- str_remove(.y, "(?<=-).+")
+    nms  <- str_c(base, c("all", as.character(typs)))
+    
+    l <- map(typs, ~ filter(obj, Cluster == .x))
+    l <- append(list(obj), l)
+    
+    names(l) <- nms
+    
+    l
+  }) %>%
+  flatten()
+
+# Create expanded GO figures
+create_go_summary_figures <- function(go_in, sample_name, n_clsts = 5,
+                                      n_terms = 6, n_genes = 4) {
+  
+  # Cluster GO terms
+  ovlp <- ifelse(grepl(so_8_re, sample_name), 3, 10)
+  shrd <- ifelse(grepl("-all$", sample_name), 2, 1)
+  
+  clsts <- go_in %>%
+    get_clusters(
+      k         = n_clsts,
+      n_overlap = ovlp,
+      n_shared  = 1
+    )
+  
+  if (is.null(clsts)) return(NULL)
+  
+  obj    <- str_remove(sample_name, "-.+$")
+  obj    <- str_c(obj, "-up")
+  go_typ <- go[[obj]]  # use objects containing all cell types for plotting
+  
+  # Create tree
+  clst_ids <- as.character(unique(sort(clsts$clusters$cluster)))
+  
+  clst_clrs <- set_names(
+    unname(type_cols)[1:n_distinct(clst_ids)],
+    clst_ids
+  )
+  
+  cl <- split(
+    names(clsts$clusters_object),
+    clsts$clusters_object
+  )
+  
+  tr <- ggtree(clsts$object, linewidth = 1.5)
+  
+  clades <- cl %>%
+    map_int(~ MRCA(tr, .x))
+  
+  tr <- groupClade(tr, clades, group_name = "cluster") +
+    aes(color = cluster) +
+    scale_color_manual(values = clst_clrs) +
+    geom_tiplab(angle = 90, hjust = 1, nudge_x = -0.1) +
+    layout_dendrogram() +
+    theme(
+      legend.position = "none",
+      plot.margin = margin(6, 6, 250, 6)
+    )
+  
+  # Create heatmaps
+  heat <- clsts$clusters %>%
+    create_go_heatmap(
+      go_in      = go_typ,
+      n_overlap  = ovlp,
+      n_clusters = n_clsts,
+      n_terms    = n_terms,
+      n_col      = 1,
+      free_y     = FALSE,
+      clrs       = clst_clrs
+    )
+  
+  # Select genes to plot
+  # tot_n_terms <- clsts$clusters %>%
+  #   group_by(cluster) %>%
+  #   dplyr::slice(1:n_terms) %>%
+  #   nrow
+  n_gns <- seq_len(n_genes)
+  
+  gns <- go_typ@compareClusterResult %>%
+    as_tibble() %>%
+    right_join(heat$terms, by = "Description") %>%
+    mutate(geneID = str_split(geneID, "/")) %>%
+    unnest(geneID) %>%
+    group_by(geneID, cluster) %>%
+    summarize(n = n_distinct(Cluster), .groups = "drop") %>%
+    distinct(geneID, .keep_all = TRUE) %>%
+    arrange(cluster, desc(n)) %>%
+    group_by(cluster) %>%
+    dplyr::slice(n_gns) %>%
+    ungroup()
+  
+  gns <- set_names(
+    as.character(gns$cluster),
+    gns$geneID
+  )
+  
+  # Create gene plots
+  gn_plts <- create_gene_plots(
+    exp_data   = list("8hpi" = so_8, "24hpi" = so_merge),
+    deg_data   = list("8hpi" = degs$`so_8-up`, "24hpi" = degs$`so_merge-up`),
+    gns        = gns,
+    cell_types = 8,
+    clrs       = clst_clrs
+  ) +
+    theme(plot.margin = margin(6, 40, 6, 40, unit = "pt"))
+  
+  # Create final figure
+  bot <- plot_grid(
+    heat$heatmap + theme(plot.margin = margin(6, 40, 6, 40, unit = "pt")),
+    gn_plts,
+    nrow = 1,
+    labels = c("B", "C"),
+    rel_widths = c(0.9, 1),
+    align = "h",
+    axis  = "tb"
+  )
+  
+  res <- plot_grid(
+    tr, bot,
+    ncol = 1,
+    rel_heights = c(0.3, 1),
+    labels = "A"
+  )
+  
+  res
+}
+
+go_type %>%
+  iwalk(~ {
+    ttl <- str_remove(.y, "^so_")
+    ttl <- str_replace(ttl, "^merge", "24hpi-8hpi")
+    
+    cat("\n\n#### ", ttl, "\n\n")
+    
+    plt <- create_go_summary_figures(
+      go_in = .x,
+      sample_name = .y
+    )
+    
+    print(plt)
+    cat("\n\n---\n\n<br>\n\n<br>")
+  })
+```
+
+
+
+```{r "GO module scores", eval = FALSE}
 
 # Object to use for calculating scores
 obj <- so_merge
@@ -2746,8 +3037,6 @@ plt_dat %>%
 
 
 ```
-
-
 
 ```{r "GSEA MARKERS", eval = FALSE}
 # Cell types to test
@@ -3436,8 +3725,6 @@ h_heat <- plt_dat %>%
 
 ```
 
-<br>
-
 # P01 figures
 
 ## Figure 1
@@ -3632,7 +3919,6 @@ append(lec_fig, fib_fig) %>%
   wrap_plots(guides = "collect", ncol = 2, byrow = FALSE) +
   plot_annotation(tag_levels = "A") &
   theme(aspect.ratio = 0.25, plot.tag = element_text(size = ttl_pt2 * 1.5))
-
 ```
 
 <br>
@@ -3656,7 +3942,6 @@ C.  The proportion of FRCs belonging to different subsets is shown for the 8 hpi
 D.  The proportion of FRCs belonging to different subsets is shown for mock and CHIKV-infected samples from the 24 hpi timepoint. The height of each bar graph shows the mean for 3 biological replicates, error bars show the standard deviation. p-values were calculated using a two-sample t-test, p-values < 0.05 are shown above each set of bar graphs.
 
 ```{r, fig.width = 12, fig.height = 6}
-
 # Adjust colors
 type_cols["LEC"] <- type_cols[[lec_cell_types]]
 type_cols["BEC"] <- lec_type_cols[["Valve"]]
@@ -4225,7 +4510,7 @@ dev.off()
 
 ```
 
-```{r "GO", eval = FALSE}
+```{r "OLD GO", eval = FALSE}
 
 # Find marker genes
 Idents(so_24) <- so_24$treatment

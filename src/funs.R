@@ -152,9 +152,9 @@ get_cell_types <- function(so_in, type_clmn, sample_clmn, n_cells = 3) {
   res <- meta %>%
     group_by(!!sym(type_clmn), !!sym(sample_clmn)) %>%
     summarize(n = n(), .groups = "drop") %>%
-    filter(n > n_cells) %>%
+    dplyr::filter(n > n_cells) %>%
     group_by(!!sym(type_clmn)) %>%
-    filter(all(sams %in% !!sym(sample_clmn))) %>%
+    dplyr::filter(all(sams %in% !!sym(sample_clmn))) %>%
     pull(type_clmn) %>%
     unique()
   
@@ -481,7 +481,7 @@ run_doubletFinder <- function(sobj_in, assay = "RNA", dbl_rate = NULL, mito_max 
   bcmvn       <- DoubletFinder::find.pK(sweep_stats)
   
   pK <- bcmvn %>%
-    filter(BCmetric == max(BCmetric)) %>%
+    dplyr::filter(BCmetric == max(BCmetric)) %>%
     pull(pK) %>%
     as.character() %>%
     as.double()
@@ -1056,7 +1056,7 @@ classify_chikv <- function(sobj_in, count_clmn, count_lim = -Inf,
         method       = method,
         return_sobj  = FALSE
       ) %>%
-      select(-.counts)
+      dplyr::select(-.counts)
     
     sobj_in <- sobj_in %>%
       AddMetaData(metadata = res) %>%
@@ -1094,7 +1094,7 @@ classify_mod_score <- function(so_in, feats, prefix, cutoff = 1, clst_col, type_
     ) %>%
     mutate_meta(~ {
       .x %>%
-        rename(!!sym(nm) := !!sym(clmn)) %>%
+        dplyr::rename(!!sym(nm) := !!sym(clmn)) %>%
         group_by(!!sym(clst_col)) %>%
         mutate(
           !!sym(nm)       := mean(!!sym(nm)),
@@ -1452,7 +1452,7 @@ create_umap_bars <- function(df_in, fill, grps = "orig.ident", filt = TRUE,
   bar_df <- df_in
   
   bar_df <- bar_df %>%
-    filter({{filt}})
+    dplyr::filter({{filt}})
   
   if (!is.null(bar_lvls)) {
     bar_df <- bar_df %>%
@@ -1568,7 +1568,7 @@ create_gene_boxes <- function(df_in, type, gene, plt_ttl = type, plt_clrs, pval_
   lvls      <- names(plt_clrs)
   
   dat <- df_in %>%
-    filter(!!sym(type_clmn) == type) %>%
+    dplyr::filter(!!sym(type_clmn) == type) %>%
     mutate(
       treat_chikv = if_else(treatment == "CHIKV", chikv_grp, treatment),
       treat_chikv = fct_relevel(treat_chikv, lvls)
@@ -1612,7 +1612,7 @@ create_gene_boxes <- function(df_in, type, gene, plt_ttl = type, plt_clrs, pval_
       v_args <- list(...)[c("x", "xend")]
       
       p <- p_vals %>%
-        filter(`Cell type 1` %in% v_args & `Cell type 2` %in% v_args) %>%
+        dplyr::filter(`Cell type 1` %in% v_args & `Cell type 2` %in% v_args) %>%
         pull(p_adj)
       
       res <<- res %>%
@@ -2033,11 +2033,11 @@ calc_p_vals <- function(sobj_in, sample_name = NULL, data_column, type_column) {
   calc_p <- function(x, y, df_in, data_column, type_column) {
     
     x_dat <- df_in %>%
-      filter(!!sym(type_column) == x) %>%
+      dplyr::filter(!!sym(type_column) == x) %>%
       pull(data_column)
     
     y_dat <- df_in %>%
-      filter(!!sym(type_column) == y) %>%
+      dplyr::filter(!!sym(type_column) == y) %>%
       pull(data_column)
     
     res <- wilcox.test(
@@ -2086,7 +2086,7 @@ calc_p_vals <- function(sobj_in, sample_name = NULL, data_column, type_column) {
     v = c_types
   ) %>%
     as_tibble(.name_repair = "unique") %>%
-    rename(x = ...1, y = ...2)
+    dplyr::rename(x = ...1, y = ...2)
   
   # Calculate pairwise wilcox test for all combinations of cell types
   res <- c_comps %>%
@@ -2103,11 +2103,11 @@ calc_p_vals <- function(sobj_in, sample_name = NULL, data_column, type_column) {
   
   # Add medians to data.frame
   res <- p_stats %>%
-    rename(med_1 = med) %>%
+    dplyr::rename(med_1 = med) %>%
     right_join(res, by = c(cell_type = "group1"), multiple = "all")
   
   res <- p_stats %>%
-    select(cell_type, med_2 = med) %>%
+    dplyr::select(cell_type, med_2 = med) %>%
     right_join(res, by = c("cell_type" = "group2"), multiple = "all")
   
   # Format final table
@@ -2133,7 +2133,7 @@ calc_p_vals <- function(sobj_in, sample_name = NULL, data_column, type_column) {
   }
   
   res <- res %>%
-    select(all_of(final_cols)) %>%
+    dplyr::select(all_of(final_cols)) %>%
     arrange(`Cell type 1`, p_adj)
   
   res
@@ -2393,12 +2393,12 @@ run_gprofiler <- function(gene_list, genome = NULL, gmt_id = NULL, p_max = 0.05,
     
     if (!is.null(GO_size)) {
       res <- res %>%
-        filter(term_size > GO_size)
+        dplyr::filter(term_size > GO_size)
     }
     
     if (!is.null(intrsct_size)) {
       res <- res %>%
-        filter(intersection_size > intrsct_size)
+        dplyr::filter(intersection_size > intrsct_size)
     }
     
     res <- res %>%
@@ -2408,7 +2408,7 @@ run_gprofiler <- function(gene_list, genome = NULL, gmt_id = NULL, p_max = 0.05,
   # Write table
   if (!is.null(file_path) && nrow(res) > 0) {
     res %>%
-      select(-parents) %>%
+      dplyr::select(-parents) %>%
       write_tsv(file_path)    
   }
   
@@ -2456,7 +2456,7 @@ find_markers <- function(sobj_in, grp_column = NULL, exclude_grp = NULL,
       ...
     ) %>%
     as_tibble() %>%
-    filter(
+    dplyr::filter(
       padj    < p_max,
       logFC   > fc_range[1],
       logFC   < fc_range[2],
@@ -2465,11 +2465,11 @@ find_markers <- function(sobj_in, grp_column = NULL, exclude_grp = NULL,
       pct_out < pct_out_max
     ) %>%
     arrange(desc(logFC)) %>%
-    rename(gene = feature)
+    dplyr::rename(gene = feature)
   
   if (!is.null(filt_group)) {
     res <- res %>%
-      filter(group %in% filt_group)
+      dplyr::filter(group %in% filt_group)
   }
   
   # Write table
@@ -2561,7 +2561,7 @@ find_conserved_markers <- function(sobj_in, ident_1 = NULL, ident_2 = NULL,
             ident_1    = .x,
             ident_2    = ident_2
           ) %>%
-          filter(
+          dplyr::filter(
             across(
               all_of(fc_clmns),
               ~ .x > fc_range[1] & .x < fc_range[2]
@@ -2577,7 +2577,7 @@ find_conserved_markers <- function(sobj_in, ident_1 = NULL, ident_2 = NULL,
   # Remove genes that match filt_regex
   if (!is.null(filt_regex)) {
     res <- res %>%
-      filter(!grepl(filt_regex, gene))
+      dplyr::filter(!grepl(filt_regex, gene))
   }
   
   # Write table
