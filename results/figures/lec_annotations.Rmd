@@ -1330,7 +1330,7 @@ ref_fib <- cbind(ref_lymphnodestromal, ref_fib)
 
 ```{r "prepare objects"}
 # Create new merged LEC object
-create_obj <- !file.exists(file.path(params$so_dir, "so_lec_annotations.qs"))
+create_obj <- !file.exists(file.path(params$so_dir, "so_lec_annotations_2.qs"))
 
 # Directories to save modified objects
 so_8_dir  <- here(params$so_dir, "so_8.qs")
@@ -1440,7 +1440,7 @@ sam_lvls <- unique(so_24$orig.ident)
 treats   <- unique(so_24$treatment)
 
 if (!create_obj) {
-  so_lec_merge <- qread(file.path(params$so_dir, "so_lec_annotations.qs"))
+  so_lec_merge <- qread(file.path(params$so_dir, "so_lec_annotations_2.qs"))
   
   rm(so_8, so_24)
 }
@@ -1542,35 +1542,42 @@ subtype_cols["unassigned"] <- "#999999"
 subtype_cols["other"]      <- fade_0
 subtype_cols["CD34+ SC"]   <- "#534379"
 
-lec_type_cols <- c(subtype_cols, type_cols[names(type_cols) != "unassigned"])
-lec_type_cols["CHIKV-low"]      <- "white"
-lec_type_cols["T cells"]        <- "black"
-lec_type_cols["B cells"]        <- "#875C04"
-lec_type_cols["FRC"]            <- "#00375B"
-lec_type_cols["PvC"]            <- "#065D43"
-lec_type_cols["unassigned-LEC"] <- "#676767"
+# lec_type_cols <- c(subtype_cols, type_cols[names(type_cols) != "unassigned"])
+# lec_type_cols["CHIKV-low"]      <- "white"
+# lec_type_cols["T cells"]        <- "black"
+# lec_type_cols["B cells"]        <- "#875C04"
+# lec_type_cols["FRC"]            <- "#00375B"
+# lec_type_cols["PvC"]            <- "#065D43"
+# lec_type_cols["unassigned-LEC"] <- "#676767"
+# 
+# lec_type_cols <- so_merge_df %>%
+#   pull(lec_type) %>%
+#   table() %>%
+#   sort(decreasing = TRUE) %>%
+#   names()
+# 
+# lec_type_cols <- lec_type_cols[lec_type_cols != "unassigned"]
+# 
+# lec_type_cols <- set_names(
+#   ito_cols[seq_along(lec_type_cols)],
+#   lec_type_cols
+# )
+# 
+# lec_type_cols["unassigned"] <- "grey70"
+# 
+# old_cols <- lec_type_cols
+# 
+# lec_type_cols["FRC"]   <- old_cols["Valve"]
+# lec_type_cols["Valve"] <- old_cols["fLEC"]
+# lec_type_cols["fLEC"]  <- old_cols["FRC"]
 
+lec_type_cols <- unique(so_lec_merge$lec_type)
+lec_type_cols <- lec_type_cols[!grepl("^unassigned", lec_type_cols)]
 
-lec_type_cols <- so_merge_df %>%
-  pull(lec_type) %>%
-  table() %>%
-  sort(decreasing = TRUE) %>%
-  names()
+lec_type_cols <- set_names(palette_OkabeIto_black, lec_type_cols)
 
-lec_type_cols <- lec_type_cols[lec_type_cols != "unassigned"]
-
-lec_type_cols <- set_names(
-  ito_cols[seq_along(lec_type_cols)],
-  lec_type_cols
-)
-
-lec_type_cols["unassigned"] <- "grey70"
-
-old_cols <- lec_type_cols
-
-lec_type_cols["FRC"]   <- old_cols["Valve"]
-lec_type_cols["Valve"] <- old_cols["fLEC"]
-lec_type_cols["fLEC"]  <- old_cols["FRC"]
+lec_type_cols["unassigned"]     <- "grey85"
+lec_type_cols["unassigned-LEC"] <- "grey70"
 
 # CHIKV clusters colors
 grp_cols <- set_names(
@@ -1602,6 +1609,8 @@ marco_expr <- c(Marco_LEC = "\"Marco\"^\"+\"*\" LEC\"")
 # * use original broad cell types based on clustering resolution 5
 # * merge 8hpi and 24hpi LECs and BECs, re-cluster
 # * integrate replicates and integrate 24hpi CHIKV sample with all other samples
+# * key issue with past attempts to perform integrated analysis is that
+#   integration does not work well when BECs are excluded
 so_lec <- list(`8hpi` = so_8, `24hpi` = so_24) %>%
   map(subset, cell_type %in% lec_cell_types)
 
@@ -1622,6 +1631,38 @@ so_lec_merge <- merge(so_lec[[1]], so_lec[-1]) %>%
     dims = 1:40, plot_convergence = TRUE
   ) %>%
   RunUMAP(reduction = "harmony", dims = 1:40)
+
+# # TESTING SEURAT INTEGRATION
+# so_lec <- so_lec %>%
+#   map(~ {
+#     .x %>%
+#       SplitObject("treatment") %>%
+#       map(~ {
+#         .x %>%
+#           NormalizeData() %>%
+#           FindVariableFeatures(nfeatures = 2000)
+#       })
+#   }) %>%
+#   flatten()
+# 
+# int_features <- so_lec %>%
+#   SelectIntegrationFeatures()
+# 
+# int_anchors <- so_lec %>%
+#   FindIntegrationAnchors(anchor.features = int_features)
+# 
+# so_int <- IntegrateData(anchorset = int_anchors)
+# 
+# DefaultAssay(so_int) <- "integrated"
+# 
+# so_int <- so_int %>%
+#   ScaleData() %>%
+#   RunPCA() %>%
+#   RunUMAP(reduction = "pca", dims = 1:40)
+# 
+# so_int %>%
+#   plot_scatter("lec_type", size = 0.5) +
+#   facet_grid(tm ~ treatment)
 
 # Parameters to test
 # get LEC annotations using 100 different settings
@@ -1854,11 +1895,11 @@ if (create_obj) {
   so_lec_merge <- so_lec_merge %>%
     mutate_meta(
       mutate,
-      new_type = ifelse(!!sym(clst) %in% top_marco, "Marco_LEC", type)
+      new_type = ifelse(!!sym(clst) %in% top_marco, "Marco_LEC", top_type)
     )
   
   so_lec_merge %>%
-    qsave(here(params$so_dir, "so_lec_annotations.qs"))
+    qsave(here(params$so_dir, "so_lec_annotations_2.qs"))
 }
 
 # so_lec_merge %>%
@@ -1938,6 +1979,24 @@ test_plts <- test_res %>%
     res
   })
 ```
+
+<br>
+
+## Summary
+
+The LEC subset annotations were reassessed.
+
+* Identified a new set annotations after integrating the datasets and compared these with our original annotations
+* I have tried this approach before with these data, but was previously unable to get reasonable integration of the samples
+* There is a population of Madcam1+ cells in the CHIKV 24 hpi dataset that could reasonably be annotated as fLECs. This population is still reduced when compared to the mock sample
+
+Expression of flow markers used in the paper to identify fLECs was assessed.
+
+* The frequency of fLECs is relatively similar for the mock and CHIKV 24 hpi datasets when this population is defined based on the flow markers.
+
+---
+
+<br>
 
 ## Sample integration {.tabset .tabset-pills}
 
@@ -2029,7 +2088,7 @@ key_markers %>%
     )
     
     print(p)
-    cat("\n\n<br>\n\n")
+    cat("\n\n---\n\n<br>\n\n")
   })
 ```
 
@@ -2061,7 +2120,7 @@ Some key things to note:
 
 * The fLEC annotation appears very consistent for the 24 hpi CHIKV sample
 * The main tzLEC cluster fluctuates between being annotated as Marco LECs, tzLECs, and fLECs. Based on Marco expression, I think it is reasonable to annotate this cluster as Marco LECs.
-* Some of the BEC clusters seem to vary when clustering parameters are modified. This is because some BEC clusters are sometimes classified as "unassigned", not because they are sometimes classified as a LEC, i.e. the BECs are always classified as a BEC or unassigned
+* Some of the BEC clusters seem to vary when clustering parameters are modified. This is because depending on the parameters some BEC clusters get classified as "unassigned", i.e. BECs are always classified as a BEC or unassigned
 
 ```{r}
 so_lec_merge %>%
@@ -2118,7 +2177,7 @@ key_markers %>%
     )
     
     print(p)
-    cat("\n\n<br>\n\n")
+    cat("\n\n---\n\n<br>\n\n")
   })
 ```
 
@@ -2189,6 +2248,9 @@ key_markers <- c(
   "Pdpn", "Pecam1", "Prox1", "Lyve1",
   "Marco", "Madcam1", "Icam1", "Vcam1", "Mrc1",
   "Ptx3", "Ackr4", "Cd36"
+  
+  # "Cd3e", "Cd4", "Cd8a", "Ptprc"
+  # "Bmp4", "Cav1", "Edn1", "Pdgfb"
 )
 
 key_markers %>%
@@ -2225,7 +2287,7 @@ key_markers %>%
     )
     
     print(p)
-    cat("\n\n<br>\n\n")
+    cat("\n\n---\n\n<br>\n\n")
   })
 ```
 
@@ -2264,13 +2326,15 @@ type_args %>%
   plot_grid(plotlist = ., ncol = 1)
 ```
 
+---
+
 <br>
 
-## Marco expression in CHIKV-high cells
+## CHIKV-high Marco expression
 
 Marco expression is shown below for CHIKV-low/high cells for the original, integrated, and refined cell type annotations. Marco is consistently more highly expressed in CHIKV-high cells regardless of cell type annotations.
 
-```{r, fig.width = 11, fig.height = 2.7}
+```{r, fig.width = 8, fig.height = 5.5}
 vars <- c(
   "orig.ident", "tm", "treatment", "rep",
   "chikv_grp", type_args$clmn, "Marco"
@@ -2282,7 +2346,7 @@ dat <- so_lec_merge %>%
   filter(treatment == "CHIKV") %>%
   mutate(chikv_grp = fct_relevel(chikv_grp, chikv_grps))
   
-type_args %>%
+plts <- type_args %>%
   pmap(~ {
     args <- list(...)
     clrs <- c(`CHIKV-low` = "lightblue", `CHIKV-high` = args$color)
@@ -2302,6 +2366,7 @@ type_args %>%
       ggplot(aes(orig.ident, Marco, color = chikv_grp, fill = chikv_grp)) +
       geom_boxplot(
         alpha = 0.5,
+        linewidth  = 0.5,
         outlier.alpha = 1,
         outlier.size  = 0.1,
         position      = position_dodge2(preserve = "single")
@@ -2319,9 +2384,421 @@ type_args %>%
         legend.title = element_blank(),
         legend.position = "bottom"
       )
+  })
+
+plts <- append(plts[1:2], list(NULL)) %>%
+  append(plts[3])
+
+plot_grid(plotlist = plts, nrow = 2, rel_widths = c(0.6, 1))
+```
+
+---
+
+<br>
+
+## Flow markers
+
+LECs were divided into MRC1+/- cells
+
+```{r "Mrc1", fig.width = 10, fig.height = 6}
+# Format new object
+key_marks <- c("Pdpn", "Pecam1", "Mrc1", "Icam1", "Cd36", "Itga2b")
+
+so_lec <- so_lec_merge %>%
+  subset(new_type != "BEC")
+
+so_lec <- so_lec %>%
+  AddMetaData(FetchData(., key_marks))
+
+# Set new colors
+new_cols          <- lec_type_cols
+new_cols["fLEC"]  <- lec_type_cols["tzLEC"]
+new_cols["tzLEC"] <- lec_type_cols["fLEC"]
+
+new_cols_2             <- new_cols
+new_cols_2["new_fLEC"] <- lec_type_cols["tzLEC"]
+new_cols_2["fLEC"]     <- lec_type_cols["unassigned-LEC"]
+
+# # Pdpn and Pecam1
+# so_lec_merge %>%
+#   mutate_meta(mutate, broad_type = ifelse(new_type == "BEC", new_type, "LEC")) %>%
+#   plot_scatter(
+#     "broad_type",
+#     x = "Pecam1",
+#     y = "Pdpn",
+#     plot_colors = palette_OkabeIto
+#   ) +
+#   facet_grid(tm ~ treatment)
+# mean_dat <- so_lec_merge %>%
+#   FetchData(c("tm", "treatment", "new_type", clst, "Pdpn", "Pecam1")) %>%
+#   mutate(broad_type = ifelse(new_type == "BEC", new_type, "LEC")) %>%
+#   group_by(!!sym(clst), tm, treatment, broad_type) %>%
+#   summarize(across(c(Pdpn, Pecam1), mean), .groups = "drop")
+
+# Identity Mrc1- cells
+# Pecam1 > 0.25; Mrc1 < 0.2
+mrc1_cutoff  <- 0.2
+pecam_cutoff <- 0.25
+
+so_lec <- so_lec %>%
+  mutate_meta(
+    mutate,
+    mrc1_grp = ifelse(Pecam1 > pecam_cutoff & Mrc1 < mrc1_cutoff,  "Mrc1-", "other"),
+    mrc1_grp = ifelse(Pecam1 > pecam_cutoff & Mrc1 >= mrc1_cutoff, "Mrc1+", mrc1_grp)
+  ) %>%
+  mutate_meta(~ {
+    .x %>%
+      group_by(tm, treatment) %>%
+      mutate(n = n()) %>%
+      group_by(tm, treatment, mrc1_grp) %>%
+      mutate(mrc1_frac = n() / n) %>%
+      ungroup()
+  })
+
+# Create scatter plots
+lab_dat <- so_lec@meta.data %>%
+  filter(mrc1_grp != "other") %>%
+  distinct(tm, treatment, mrc1_grp, n, mrc1_frac) %>%
+  mutate(
+    mrc1_frac = round(mrc1_frac * 100, 1),
+    mrc1_frac = str_c(mrc1_grp, ": ", mrc1_frac, "%"),
+    n = scales::label_comma()(n),
+    n = str_c("n = ", n)
+  ) %>%
+  pivot_wider(names_from = mrc1_grp, values_from = mrc1_frac) %>%
+  mutate(lab = str_c(n, `Mrc1-`, `Mrc1+`, sep = "\n"))
+
+s <- so_lec %>%
+  plot_scatter(
+    "new_type",
+    x = "Pecam1",
+    y = "Mrc1",
+    plot_colors = new_cols,
+    plot_lvls = "fLEC",
+    n_label = "legend"
+  ) +
+  facet_grid(tm ~ treatment) + 
+  geom_segment(
+    aes(x = pecam_cutoff, xend = Inf, y = mrc1_cutoff, yend = mrc1_cutoff),
+    linetype = 2,
+    color = "black",
+    show.legend = FALSE
+  ) +
+  geom_segment(
+    aes(x = pecam_cutoff, xend = pecam_cutoff, y = -Inf, yend = mrc1_cutoff),
+    linetype = 2,
+    color = "black",
+    show.legend = FALSE
+  ) +
+  geom_text(
+    aes(Inf, Inf, label = lab),
+    data = lab_dat,
+    color = "black",
+    hjust = 1.1,
+    vjust = 1.1,
+    size  = 8 / .pt
+  ) +
+  theme(
+    aspect.ratio = 0.9,
+    legend.title = element_blank()
+  )
+
+# Create bargraphs
+b <- so_lec@meta.data %>%
+  filter(mrc1_grp != "other") %>%
+  mutate(tm_treat = str_c(tm, "-", treatment)) %>%
+  ggplot(aes(tm_treat, fill = new_type, color = new_type)) +
+  geom_bar(position = "fill", alpha = 0.7) +
+  facet_wrap(~ mrc1_grp, ncol = 1) +
+  scale_color_manual(values = new_cols) +
+  scale_fill_manual(values = new_cols) +
+  djvdj_theme() +
+  theme(
+    axis.title   = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text.y  = element_blank(),
+    legend.position = "none",
+    axis.text.x  = element_text(hjust = 1, angle = 45)
+  )
+
+# Create final figure
+plot_grid(
+  s, b,
+  nrow = 1,
+  align = "h",
+  axis  = "tb",
+  rel_widths = c(1, 0.3)
+)
+```
+
+MRC1-/ICAM1+/CD36- cells were selected
+
+```{r "Cd36", fig.width = 10, fig.height = 6}
+# Identify Cd36- cells
+# Cd36 > 1; Icam1 > 0.2
+cd36_cutoff  <- 1
+icam1_cutoff <- 0.2
+
+so_lec <- so_lec %>%
+  mutate_meta(
+    mutate,
+    cd36_grp = ifelse(
+      mrc1_grp == "Mrc1-" & Cd36 < cd36_cutoff & Icam1 > icam1_cutoff,
+      "Cd36-", "other"
+    )
+  )
+
+# Create scatter plots
+lab_dat <- so_lec@meta.data %>%
+  filter(mrc1_grp == "Mrc1-") %>%
+  group_by(tm, treatment) %>%
+  mutate(n = n()) %>%
+  group_by(tm, treatment, n, cd36_grp) %>%
+  summarize(frac = n() / n, .groups = "drop") %>%
+  distinct() %>%
+  mutate(
+    frac = round(frac * 100, 1),
+    frac = str_c(cd36_grp, ": ", frac, "%"),
+    n = scales::label_comma()(n),
+    n = str_c("n = ", n)
+  ) %>%
+  filter(cd36_grp == "Cd36-") %>%
+  pivot_wider(names_from = cd36_grp, values_from = frac) %>%
+  mutate(lab = str_c(n, `Cd36-`, sep = "\n"))
+
+s <- so_lec %>%
+  subset(mrc1_grp == "Mrc1-") %>%
+  plot_scatter(
+    "new_type",
+    x = "Cd36",
+    y = "Icam1",
+    plot_colors = new_cols,
+    plot_lvls = "fLEC",
+    n_label = "legend"
+  ) +
+  facet_grid(tm ~ treatment) + 
+  geom_segment(
+    aes(x = cd36_cutoff, xend = cd36_cutoff, y = icam1_cutoff, yend = Inf),
+    linetype = 2,
+    color = "black",
+    show.legend = FALSE
+  ) +
+  geom_segment(
+    aes(x = -Inf, xend = cd36_cutoff, y = icam1_cutoff, yend = icam1_cutoff),
+    linetype = 2,
+    color = "black",
+    show.legend = FALSE
+  ) +
+  geom_text(
+    aes(Inf, Inf, label = lab),
+    data = lab_dat,
+    color = "black",
+    hjust = 1.1,
+    vjust = 1.1,
+    size  = 8 / .pt
+  ) +
+  theme(
+    aspect.ratio = 0.9,
+    legend.title = element_blank()
+  )
+
+# Create bargraphs
+b <- so_lec@meta.data %>%
+  filter(mrc1_grp == "Mrc1-") %>%
+  mutate(
+    tm_treat = str_c(tm, "-", treatment),
+    new_type = fct_relevel(new_type, c("fLEC", "Marco_LEC"))
+  ) %>%
+  ggplot(aes(tm_treat, fill = new_type, color = new_type)) +
+  geom_bar(position = "fill", alpha = 0.7) +
+  facet_wrap(~ cd36_grp, ncol = 1) +
+  scale_color_manual(values = new_cols) +
+  scale_fill_manual(values = new_cols) +
+  djvdj_theme() +
+  theme(
+    axis.title   = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text.y  = element_blank(),
+    legend.position = "none",
+    axis.text.x  = element_text(hjust = 1, angle = 45)
+  )
+
+# Create final figure
+plot_grid(
+  s, b,
+  nrow = 1,
+  align = "h",
+  axis  = "tb",
+  rel_widths = c(1, 0.3)
+)
+```
+
+MRC1-/ICAM1+/CD36-/ITGA2B+ cells were selected
+
+```{r "Itga2b", fig.width = 10, fig.height = 6}
+# Identify Itga2b+ cells
+itga2b_cutoff <- 0.25
+
+so_lec <- so_lec %>%
+  mutate_meta(
+    mutate,
+     new_fLEC = ifelse(
+      cd36_grp == "Cd36-" & Itga2b > itga2b_cutoff,
+      "new_fLEC", "other"
+    )
+  )
+
+new_fLECs <- so_lec@meta.data %>%
+  filter(new_fLEC == "new_fLEC") %>%
+  dplyr::select(new_fLEC)
+
+so_lec_merge <- so_lec_merge %>%
+  AddMetaData(new_fLECs, "new_fLEC") %>%
+  mutate_meta(mutate, new_fLEC = ifelse(is.na(new_fLEC), new_type, new_fLEC))
+
+# Create scatter plots
+lab_dat <- so_lec@meta.data %>%
+  filter(cd36_grp == "Cd36-") %>%
+  group_by(tm, treatment) %>%
+  mutate(n = n()) %>%
+  group_by(tm, treatment, n, new_fLEC) %>%
+  summarize(frac = n() / n, .groups = "drop") %>%
+  distinct() %>%
+  mutate(
+    frac = round(frac * 100, 1),
+    frac = str_c(new_fLEC, ": ", frac, "%"),
+    n = scales::label_comma()(n),
+    n = str_c("n = ", n)
+  ) %>%
+  filter(new_fLEC == "new_fLEC") %>%
+  pivot_wider(names_from = new_fLEC, values_from = frac) %>%
+  mutate(lab = str_c(n, new_fLEC, sep = "\n"))
+
+s <- so_lec %>%
+  subset(cd36_grp == "Cd36-") %>%
+  plot_scatter(
+    "new_type",
+    x = "Cd36",
+    y = "Itga2b",
+    plot_colors = new_cols,
+    plot_lvls = "fLEC",
+    n_label = "legend"
+  ) +
+  facet_grid(tm ~ treatment) + 
+  geom_hline(yintercept = itga2b_cutoff, linetype = 2) +
+  geom_text(
+    aes(Inf, Inf, label = lab),
+    data = lab_dat,
+    color = "black",
+    hjust = 1.1,
+    vjust = 1.1,
+    size  = 8 / .pt
+  ) +
+  theme(
+    legend.title = element_blank(),
+    aspect.ratio = 0.9
+  )
+
+# Create bargraphs
+b <- so_lec@meta.data %>%
+  filter(cd36_grp == "Cd36-") %>%
+  mutate(
+    tm_treat = str_c(tm, "-", treatment),
+    new_type = fct_relevel(new_type, c("fLEC", "Marco_LEC"))
+  ) %>%
+  ggplot(aes(tm_treat, fill = new_type, color = new_type)) +
+  geom_bar(position = "fill", alpha = 0.7) +
+  facet_wrap(~ new_fLEC, ncol = 1) +
+  scale_color_manual(values = new_cols) +
+  scale_fill_manual(values = new_cols) +
+  scale_y_continuous(breaks = c(0, 0.5, 1)) +
+  djvdj_theme() +
+  theme(
+    axis.title   = element_blank(),
+    # axis.ticks.y = element_blank(),
+    # axis.text.y  = element_blank(),
+    legend.position = "none",
+    axis.text.x  = element_text(hjust = 1, angle = 45)
+  )
+
+# Create final figure
+plot_grid(
+  s, b,
+  nrow = 1,
+  align = "h",
+  axis  = "tb",
+  rel_widths = c(1, 0.3)
+)
+```
+
+The revised fLEC annotations are shown below
+
+```{r "new fLEC UMAP"}
+so_lec_merge %>%
+  plot_scatter(
+    "new_fLEC",
+    size = 0.01,
+    plot_colors = new_cols_2,
+    plot_lvls = "new_fLEC"
+  ) +
+  facet_grid(tm ~ treatment)
+```
+
+The difference in fLEC frequency is shown below for the new fLEC annotations
+
+```{r "new fLEC frequency", fig.width = 10, fig.height = 3}
+c("8hpi", "24hpi") %>%
+  map(~ {
+    so_lec_merge %>%
+      subset(tm == .x & new_type != "BEC") %>%
+      plot_frequency(
+        "new_fLEC", "orig.ident", "treatment",
+        plot_colors = c("#0072B2", "#D55E00"),
+        p_label = "none"
+        # p_method = "edgeR"
+      ) +
+      labs(title = .x, y = "% LECs")
   }) %>%
   plot_grid(plotlist = ., nrow = 1)
 ```
 
+```{r "OLD new fLECs", eval = FALSE}
+# Add new fLECs to object
+so_lec_merge <- so_lec_merge %>%
+  AddMetaData(FetchData(new_fLECs, "new_fLEC")) %>%
+  mutate_meta(mutate, new_fLEC = ifelse(is.na(new_fLEC), new_type, new_fLEC))
+
+so_lec_merge %>%
+  plot_scatter(
+    "new_fLEC",
+    size = 0.5,
+    plot_colors = new_cols_2,
+    plot_lvls = "new_fLEC"
+  ) +
+  facet_grid(tm ~ treatment)
+
+new_fLECs@meta.data %>%
+  mutate(
+    tm_treat = str_c(tm, "-", treatment),
+    new_type = fct_infreq(new_type)
+  ) %>%
+  ggplot(aes(tm_treat, fill = new_type, color = new_type)) +
+  geom_bar(position = "fill", alpha = 0.5) +
+  scale_color_manual(values = new_cols_2) +
+  scale_fill_manual(values = new_cols_2) +
+  djvdj_theme()
+
+c("8hpi", "24hpi") %>%
+  map(~ {
+    so_lec_merge %>%
+      subset(tm == .x & new_type != "BEC") %>%
+      plot_frequency(
+        "new_fLEC", "orig.ident", "treatment",
+        p_label = "none"
+        # p_method = "edgeR"
+      )
+  }) %>%
+  plot_grid(plotlist = ., nrow = 1)
+```
 
 

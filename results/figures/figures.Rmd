@@ -13,8 +13,12 @@ params:
   template_dir: "src"
   so_dir:       "~/Dropbox/Ryan/Projects/morrison-lnsc/results/sobjs"
   orig_so_dir:  "~/Dropbox/Ryan/Projects/morrison-scRNA-seq/results"
+  type_res:     5                         # Clustering resolution for annotating cell types
+  lec_res:      5                         # Clustering resolution for annotating LECs
+  fib_res:      5                         # Clustering resolution for annotating fibroblasts/stromal cells
+  
 editor_options: 
-  chunk_output_type: inline
+  chunk_output_type: console
 ---
 
 <br>
@@ -41,6 +45,7 @@ library(ggtext)
 
 # analysis
 library(Seurat)
+library(harmony)
 library(clustifyr)
 library(clustifyrdata)
 library(DoubletFinder)
@@ -1113,12 +1118,15 @@ create_go_heatmap <- function(df_in, go_in, n_clusters = 2, n_terms = 5,
 #' types to include can be provided.
 #' @param lvls Levels to use for ordering values in treatment column
 #' @param n_cells Number of cells that must be present for each replicate of
-#' each treatment group for the cell type to be included
+#' each treatment group for a line to be shown for the timepoint/cell type
+#' @param only_show_upreg Only show cell types with at least one gene
+#' upregulated for any of the timepoints
 create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge),
                               deg_data =  list("8hpi" = degs$`so_8-up`, "24hpi" = degs$`so_merge-up`),
                               gns,
                               clrs = c(`1` = "orange"), cell_types = 8,
-                              lvls = c("mock", "8hpi", "24hpi"), n_cells = 10) {
+                              lvls = c("mock", "8hpi", "24hpi"), n_cells = 10,
+                              type_clmn = "subtype", only_show_upreg = TRUE) {
   
   # Genes to plot
   genes <- names(gns)
@@ -1127,7 +1135,7 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
   exp_data <- exp_data %>%
     imap_dfr(~ {
       .x %>%
-        FetchData(c("subtype", "orig.ident", "treatment", "rep", genes)) %>%
+        FetchData(c(type_clmn, "orig.ident", "treatment", "rep", genes)) %>%
         as_tibble(rownames = ".cell_id") %>%
         mutate(tm = .y) %>%
         pivot_longer(all_of(names(gns)))
@@ -1136,18 +1144,20 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
     filter(treatment != "8hpi" | tm != "24hpi") %>%  # exclude 8hpi CHIKV data from 24hpi objects (e.g. so_merge)
     filter(tm == "8hpi" | treatment != "mock") %>%   # exclude mock data from 24hpi objects (e.g. so_24)
                                                      # redefine treatment as mock or tm
+    
+    filter(!(!!sym(type_clmn)) %in% c("other", "unassigned")) %>%  # do not show other and unassigned cells
     mutate(treatment = ifelse(treatment %in% lvls, treatment, tm))
     
   # Only include samples with >10 cells for each replicate
   exp_data <- exp_data %>%
-    group_by(subtype, treatment) %>%
+    group_by(!!sym(type_clmn), treatment) %>%
     mutate(reps = list(unique(rep))) %>%
-    group_by(subtype, treatment, rep) %>%
+    group_by(!!sym(type_clmn), treatment, rep) %>%
     filter(n_distinct(.cell_id) >= n_cells) %>%
     
-    group_by(subtype, treatment) %>%
+    group_by(!!sym(type_clmn), treatment) %>%
     filter(all(unique(unlist(reps)) %in% rep)) %>%
-    group_by(subtype, name) %>%
+    group_by(!!sym(type_clmn), name) %>%
     filter(n_distinct(treatment) > 1) %>%
     ungroup()
   
@@ -1157,27 +1167,27 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
       .x %>%
         dplyr::filter(gene %in% genes) %>%
         dplyr::mutate(treatment = .y) %>%
-        dplyr::select(gene, treatment, subtype, max_pval)
+        dplyr::select(gene, treatment, !!sym(type_clmn), max_pval)
     })
   
   # Filter for top cell types to plot
   if (!is.null(cell_types)) {
     if (is.numeric(cell_types)) {
       cell_types <- deg_data %>%
-        group_by(subtype) %>%
+        group_by(!!sym(type_clmn)) %>%
         summarize(n_genes = n(), .groups = "drop") %>%
         arrange(desc(n_genes)) %>%
         head(cell_types) %>%
-        pull(subtype)
+        pull(type_clmn)
     }
     
     exp_data <- exp_data %>%
-      dplyr::filter(subtype %in% cell_types)
+      dplyr::filter(!!sym(type_clmn) %in% cell_types)
   }
   
   # Format data for plotting points
   plt_dat <- exp_data %>%
-    group_by(subtype, treatment, name) %>%
+    group_by(!!sym(type_clmn), treatment, name) %>%
     summarize(
       n       = n(),
       q3      = quantile(value, 0.75),
@@ -1201,10 +1211,10 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
   # need to pull table of DEGs to determine which timepoints/genes are signif
   # pull median expression to use for the start and end of each segment
   exp_dat <- plt_dat %>%
-    dplyr::select(name, treatment, subtype, value)
+    dplyr::select(name, treatment, !!sym(type_clmn), value)
   
   ln_dat <- plt_dat %>%
-    left_join(deg_data, by = c(name = "gene", "treatment", "subtype")) %>%
+    left_join(deg_data, by = c(name = "gene", "treatment", type_clmn)) %>%
     
     dplyr::filter(x > 0) %>%  # remove rows that start at 0 (occurs for mock)
     
@@ -1213,39 +1223,42 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
     mutate(trt_end = lvls[x_end], trt_start = lvls[x]) %>%
     
     dplyr::select(
-      name, treatment, subtype, cluster,
+      name, treatment, !!sym(type_clmn), cluster,
       x, x_end, trt_start, trt_end,
       max_pval
     ) %>%
     
-    left_join(exp_dat, by = c("name", trt_start = "treatment", "subtype")) %>%
+    left_join(exp_dat, by = c("name", trt_start = "treatment", type_clmn)) %>%
     dplyr::rename(y = value) %>%
     
-    left_join(exp_dat, by = c("name", trt_end = "treatment", "subtype")) %>%
+    left_join(exp_dat, by = c("name", trt_end = "treatment", type_clmn)) %>%
     dplyr::rename(y_end = value) %>%
     
     mutate(
       Upregulated = as.character(!is.na(max_pval)),
       Upregulated = fct_relevel(Upregulated, c("TRUE", "FALSE")),
       name        = fct_relevel(name, genes)
-    ) %>%
-    group_by(subtype) %>%
-    filter(any(Upregulated == "TRUE")) %>%
-    ungroup()
+    )
+  
+  # Only show cell types with at least one gene upregulated for any timepoint
+  if (only_show_upreg) {
+    ln_dat <- ln_dat %>%
+      group_by(!!sym(type_clmn)) %>%
+      filter(any(Upregulated == "TRUE")) %>%
+      ungroup()
+  }
   
   # Create plots
   aspect <- length(genes) / n_distinct(plt_dat$name) * 0.9
   
   res <- plt_dat %>%
-    filter(subtype %in% unique(ln_dat$subtype)) %>%
+    filter(!!sym(type_clmn) %in% unique(pull(ln_dat, type_clmn))) %>%
     ggplot(aes(treatment, value, color = cluster)) +
     
     geom_errorbar(
       aes(x = treatment, ymin = q1, ymax = q3),
       color = "grey90",
-      # color = "grey85",
       width = 0,
-      # linewidth = 0.25
       linewidth = 1.5
     ) +
     geom_point(size = 1.5) +
@@ -1257,7 +1270,7 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
       linewidth = 0.75,
       data  = ln_dat
     ) +
-    facet_grid(name ~ subtype, switch = "y", scales = "free_y") +
+    facet_grid(as.formula(str_c("name ~ ", typ_clmn)), switch = "y", scales = "free_y") +
     
     scale_linetype_manual(values = c("TRUE" = 1, "FALSE" = 3)) +
     scale_color_manual(values = clrs) +
@@ -1285,17 +1298,148 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
 }
 ```
 
-```{r "load objects"}
-# Directories to save modified objects
-so_8_dir  <- here(params$so_dir, "so_8.qs")
-so_24_dir <- here(params$so_dir, "so_24.qs")
+```{r "references"}
+# LEC reference
+ref_lec <- ref_immgen[, grepl("^Endothelial cells", colnames(ref_immgen))]
+ref_lec <- ref_lec[rownames(ref_lec) %in% rownames(ref_LEC_xiang), ]
+
+colnames(ref_lec) <- colnames(ref_lec) %>%
+  str_replace("Endothelial cells \\(BEC\\)", "BEC")
+
+ref_LEC_xiang <- ref_LEC_xiang[rownames(ref_lec), ]
+
+if (!identical(rownames(ref_LEC_xiang), rownames(ref_lec))) {
+  stop("LEC reference rownames do not match.")
+}
+
+ref_lec <- cbind(ref_LEC_xiang, ref_lec)
+ref_lec <- ref_lec[, !grepl("^Endothelial cells", colnames(ref_lec))]
+
+# Fibroblast/stromal cell reference
+ref_fib <- ref_immgen[, grepl("^Fibroblast", colnames(ref_immgen))]
+ref_fib <- ref_fib[rownames(ref_fib) %in% rownames(ref_lymphnodestromal), ]
+
+ref_lymphnodestromal <- ref_lymphnodestromal[rownames(ref_fib), ]
+
+if (!identical(rownames(ref_lymphnodestromal), rownames(ref_fib))) {
+  stop("Fibroblast/stromal reference rownames do not match.")
+}
+
+ref_fib <- cbind(ref_lymphnodestromal, ref_fib)
+```
+
+```{r "prepare 8hpi object"}
 
 lec_cell_types <- "Endothelial cells"
-fib_cell_types <- c("Fibroblasts", "Stromal cells")
+fib_cell_types <- c("Fibroblasts", "Stromal cells", "Stromal cells (DN)")
+
+so_8_dir <- here(params$so_dir, "so_8.qs")
+
+rslns <- c(1, 2, 4, 5)
+
+fib_clsts <- rslns %>%
+  set_clst_names("fib_")
+
+fib_clst_clmn <- fib_clsts %>%
+  pluck(as.character(params$fib_res), "clst")
+
+if (!file.exists(so_8_dir)) {
+  so_8 <- read_rds(file.path(params$orig_so_dir, "2021-07-16/sobjs/so.rds"))
+  
+  # Cluster 27 appears to be FRCs based on Pdpn, Pecam1, and Pdgfra
+  # Clusters 10 and 22 appear to be BECs based on Pdpn and Pecam1
+  so_8 <- so_8 %>%
+    mutate_meta(
+      mutate,
+      cell_type = ifelse(RNA_snn_res.5 == "27", "Fibroblasts", cell_type),
+      cell_type = ifelse(RNA_snn_res.5 %in% c("10", "22"), "Endothelial cells", cell_type)
+    )
+  
+  # Classify non-endothelial stromal cell types
+  # ref_fib is ref_lymphnodestromal with immgen fibroblast references added
+  so_fib <- so_8 %>%
+    subset_sobj(
+      subset       = cell_type %in% fib_cell_types,
+      rsln         = rslns,
+      dims         = 1:40
+      # regress_vars = "nCount_RNA"
+    )
+  
+  fib_clsts %>%
+    iwalk(~ {
+      so_fib <<- so_fib %>%
+        mutate_meta(dplyr::select, -UMAP_1, -UMAP_2) %>%
+        clustify(
+          # ref_mat       = ref_lymphnodestromal,
+          ref_mat       = ref_fib,
+          cluster_col   = .x$clst,
+          rename_prefix = .x$type,
+          threshold     = 0.65
+        )
+    })
+  
+  # Set fibroblast/stromal cell types
+  fib_clmn <- as.character(params$fib_res)
+  fib_clmn <- fib_clsts[[fib_clmn]]$type
+  fib_clmn <- str_c(fib_clmn, "_type")
+  
+  so_fib <- so_fib %>%
+    mutate_meta(
+      mutate,
+      fib_type = !!sym(fib_clmn),
+      
+      fib_type_clst = if_else(
+        fib_type == "unassigned",
+        str_c(fib_type, "-", !!sym(fib_clst_clmn)),
+        fib_type
+      )
+    )
+  
+  so_fib_24 <- so_24 %>%
+    subset_sobj(
+      subset       = fib_subtype != "other",
+      rsln         = rslns,
+      dims         = 1:40
+      # regress_vars = "nCount_RNA"
+    )
+  
+  so_fib_24 <- so_fib_24 %>%
+    RunHarmony("treatment", lambda = 0.01) %>%
+    RunUMAP(reduction = "harmony", dims = 1:40)
+    
+    
+  
+  all_fib <- merge(so_fib, so_fib_24) %>%
+    FindVariableFeatures() %>%
+    ScaleData() %>%
+    RunPCA() %>%
+    RunUMAP(reduction = "pca", dims = 1:40)
+    
+  # Add fibroblast/stromal subtypes back to original object
+  so_8 <- so_8 %>%
+    AddMetaData(
+      metadata = so_fib$fib_type,
+      col.name = "fib_type"
+    ) %>%
+    mutate_meta(
+      mutate,
+      fib_subtype = replace_na(fib_type, "other"),
+      fib_type    = recode(lec_type, "unassigned" = "unassigned-fib"),  # THIS IS A TYPO
+      fib_type    = if_else(fib_subtype == "other", cell_type, fib_type),
+      subtype     = if_else(fib_subtype == "other", subtype, fib_type)
+    )
+}
+
+
+
+```
+
+```{r "prepare 24hpi object"}
+# Directories to save modified objects
+so_24_dir <- here(params$so_dir, "so_24.qs")
 
 # Replace this with setup.Rmd that has code used to process each sample
-if (!file.exists(so_8_dir) || !file.exists(so_24_dir)) {
-  so_8  <- read_rds(file.path(params$orig_so_dir, "2021-07-16/sobjs/so.rds"))
+if (!file.exists(so_24_dir)) {
   so_24 <- read_rds(file.path(params$orig_so_dir, "2021-01-08/sobjs/so.rds"))
   
   # Adjust 24 hpi
@@ -1305,7 +1449,7 @@ if (!file.exists(so_8_dir) || !file.exists(so_24_dir)) {
   so_24 <- so_24 %>%
     mutate_meta(
       mutate,
-      cell_type   = case_when(
+      cell_type = case_when(
         fib_type == "PvC"             ~ fib_type,
         cell_type %in% fib_cell_types ~ "FRC",
         TRUE                          ~ cell_type
@@ -1315,8 +1459,8 @@ if (!file.exists(so_8_dir) || !file.exists(so_24_dir)) {
   so_24 <- so_24 %>%
     mutate_meta(
       mutate,
+      lec_subtype = recode(lec_subtype, unassigned = "unassigned-LEC"),
       lec_type = case_when(
-        lec_subtype == "unassigned"   ~ "unassigned-LEC",
         cell_type %in% lec_cell_types ~ lec_subtype,
         TRUE                          ~ cell_type
       )
@@ -1339,13 +1483,23 @@ if (!file.exists(so_8_dir) || !file.exists(so_24_dir)) {
   # Adjust subtype column
   so_8 <- so_8 %>%
     mutate_meta(
+      mutate,
+      fib_type = if_else(fib_subtype == "other", cell_type, fib_subtype),
+      cell_type = case_when(
+        fib_type == "PvC"             ~ fib_type,
+        cell_type %in% fib_cell_types ~ "FRC",
+        TRUE                          ~ cell_type
+      )
+    )
+  
+  so_8 <- so_8 %>%
+    mutate_meta(
       mutate, 
       orig.ident = str_c(treatment, "-", rep),
-      lec_type = recode(
-        lec_type,
-        `unassigned-LEC`     = "unassigned",
-        Fibroblasts          = "FRC",
-        `Stromal cells (DN)` = "PvC"
+      lec_type = case_when(
+        lec_subtype == "unassigned"   ~ lec_subtype,  # replace unassigned-LEC label
+        cell_type %in% lec_cell_types ~ lec_subtype,
+        TRUE                          ~ cell_type
       ),
       chikv_grp = ifelse(tot_nCount_CHIKV > 0, chikv_grps[2], chikv_grps[1])
     )
@@ -1357,10 +1511,12 @@ if (!file.exists(so_8_dir) || !file.exists(so_24_dir)) {
     )
   
   ### NEED TO UPDATE THIS FOR SUBTYPES ###
+  # add cluster to so_fib, re-cluster, re-annotate
   so_8 <- so_8 %>%
     mutate_meta(
       mutate,
-      lec_type = ifelse(RNA_snn_res.5 == "27", "FRC", lec_type)
+      lec_type  = ifelse(RNA_snn_res.5 == "27", "FRC", lec_type),
+      cell_type = ifelse(RNA_snn_res.5 == "27", "FRC", cell_type)
     )
   
   # Save objects
@@ -1406,38 +1562,8 @@ so_lec_8  <- read_rds(file.path(params$orig_so_dir, "2021-07-16/sobjs/so_lec.rds
 so_lec_24 <- read_rds(file.path(params$orig_so_dir, "2021-01-08/sobjs/so_lec.rds"))
 
 # Set levels
-sam_lvls   <- unique(so_24$orig.ident)
-treats     <- unique(so_24$treatment)
-```
-
-```{r "references"}
-# LEC reference
-ref_lec <- ref_immgen[, grepl("^Endothelial cells", colnames(ref_immgen))]
-ref_lec <- ref_lec[rownames(ref_lec) %in% rownames(ref_LEC_xiang), ]
-
-colnames(ref_lec) <- colnames(ref_lec) %>%
-  str_replace("Endothelial cells \\(BEC\\)", "BEC")
-
-ref_LEC_xiang <- ref_LEC_xiang[rownames(ref_lec), ]
-
-if (!identical(rownames(ref_LEC_xiang), rownames(ref_lec))) {
-  stop("LEC reference rownames do not match.")
-}
-
-ref_lec <- cbind(ref_LEC_xiang, ref_lec)
-ref_lec <- ref_lec[, !grepl("^Endothelial cells", colnames(ref_lec))]
-
-# Fibroblast/stromal cell reference
-ref_fib <- ref_immgen[, grepl("^Fibroblast", colnames(ref_immgen))]
-ref_fib <- ref_fib[rownames(ref_fib) %in% rownames(ref_lymphnodestromal), ]
-
-ref_lymphnodestromal <- ref_lymphnodestromal[rownames(ref_fib), ]
-
-if (!identical(rownames(ref_lymphnodestromal), rownames(ref_fib))) {
-  stop("Fibroblast/stromal reference rownames do not match.")
-}
-
-ref_fib <- cbind(ref_lymphnodestromal, ref_fib)
+sam_lvls <- unique(so_24$orig.ident)
+treats   <- unique(so_24$treatment)
 ```
 
 ```{r "theme"}
@@ -2009,6 +2135,102 @@ scatter <- list(scatter, x_ttl) %>%
   wrap_plots(ncol = 1, heights = c(1, 0.1))
 ```
 
+```{r "scatter plots v2", fig.width = 10, fig.height = 7, eval = FALSE}
+# ONLY PLOT CHIKV-HIGH CELLS
+# Shouldn't include any CHIKV-low cells, since they have been filtered
+# stringently based on QC and CHIKV-high cells have not. This would influence
+# correlations
+
+# Stats to plot
+y_vars <- c(
+  "# mouse genes\nexpressed" = "nFeature_RNA",
+  "% mitochondrial\nreads" = "pct_mito"
+)
+
+x_var <- c("CHIKV sgRNA ratio" = "CHIKV_sgRNA_fc")
+typs  <- c("Marco_LEC", "unassigned-LEC")
+
+# Scatter plots
+plt_dat <- chikv_dat %>%
+  filter(lec_type %in% typs) %>%
+  mutate(lec_type = fct_relevel(lec_type, typs)) %>%
+  dplyr::rename(!!!syms(y_vars)) %>%
+  pivot_longer(all_of(names(y_vars)))
+
+scatter <- plt_dat %>%
+  split(.$name) %>%
+  imap(~ {
+    
+    log_trans <- grepl("mouse genes", .y)
+    
+    if (log_trans) {
+      y_fn    <- log10
+      y_trans <- "log10"
+    } else {
+      y_fn    <- function(x) x
+      y_trans <- "identity"
+    }
+    
+    n_lab <- get_nlab_fun(.x, "lec_type", l = "\n", r = "")
+    
+    cor_dat <- .x %>%
+      summarize(
+        cor = list(tidy(cor.test(
+          log10(!!sym(unname(x_var))), y_fn(value),
+          method = "pearson",
+          alternative = "two.sided"
+        ))),
+        
+        pval = map_dbl(cor, pull, p.value),
+        pval = format_pvalue(pval),
+        pval = str_c("italic(p) == ", pval),
+        cor  = map_dbl(cor, pull, estimate),
+        cor  = str_c("italic(r) == ", round(cor, 2))
+        # cor  = str_c(cor, " ~ ", pval)
+      )
+    
+    .x %>%
+      ggplot(aes(!!sym(unname(x_var)), value, color = lec_type)) +
+      geom_point() +
+      geom_smooth(
+        method = "lm", formula = y ~ x,
+        color = "black", linewidth = 0.5, linetype = 2, alpha = 0.2
+      ) +
+      geom_text(
+        aes(Inf, Inf, label = cor),
+        data = cor_dat,
+        parse = TRUE,
+        hjust = 1.2, vjust = 1.2,
+        color = "black"
+      ) +
+      scale_color_manual(values = lec_type_cols, labels = n_lab) +
+      scale_x_log10() +
+      scale_y_continuous(trans = y_trans, expand = expansion(c(0.05, 0.10))) +
+      guides(color = guide_legend(override.aes = list(size = 4))) +
+      labs(x = names(x_var), y = .y) +
+      theme(aspect.ratio = 0.9) +
+      base_theme +
+      theme(
+        aspect.ratio = 0.9,
+        legend.position = "bottom",
+        legend.title = element_blank(),
+        axis.text.x = element_text(size = txt_pt1),
+        axis.text.y = element_text(size = txt_pt1)
+      )
+  })
+
+# Create final figure
+scatter <- scatter %>%
+  wrap_plots(byrow = FALSE, nrow = 1)
+
+ggsave(
+  here("results/figures/2023-07-04_alt_scatter_plots.pdf"),
+  width = 10, height = 7,
+  dpi = 600, device = "pdf"
+)
+
+```
+
 ```{r "sgRNA signal"}
 # Format plot data
 # only include cell types with >10 cells
@@ -2285,6 +2507,100 @@ type_heats <- heat_args %>%
   plot_grid(plotlist = .)
 ```
 
+```{r "cell type sample heatmaps", fig.width = 8, fig.height = 5, eval = FALSE}
+# Format heatmap data
+h_dat <- list("8hpi" = so_lec_8, "24hpi" = so_lec_24) %>%
+  imap(~ {
+    obj <- .x
+    set_names(treats, str_c(.y, "-", treats)) %>%
+      map(~ subset(obj, treatment == .x))
+  }) %>%
+  flatten() %>%
+  map(~ {
+    .x %>%
+      mutate_meta(
+        mutate,
+        lec_type = recode(lec_type, unassigned = "unassigned-LEC")
+      )
+  })
+
+rm(so_lec_8, so_lec_24)
+
+# Calculate average expression to use for correlation calculations
+ref_mats <- h_dat %>%
+  map(~ {
+    average_clusters(
+      mat         = .x@assays$RNA@data,
+      metadata    = .x@meta.data,
+      cluster_col = "lec_type"
+    )
+  })
+
+# Calculate correlation
+h_mat <- h_dat %>%
+  imap_dfr(~ {
+    mat <- .x
+    mat_sample <- .y
+    
+    ref_mats %>%
+      imap_dfr(~ {
+        mat %>%
+          clustify(
+            ref_mat        = .x,
+            cluster_col    = "lec_type",
+            seurat_out     = FALSE,
+            compute_method = "spearman",
+            n_genes        = 2000
+            # query_genes    = VariableFeatures(h_dat$`24hpi-mock`),
+            # low_threshold_cell = 50,
+          ) %>%
+          as_tibble(rownames = "assigned_type") %>%
+          pivot_longer(
+            cols      = -assigned_type,
+            names_to  = "ref_type",
+            values_to = "r"
+          ) %>%
+          mutate(
+            mat_sample = mat_sample,
+            ref_sample = .y
+          )
+      })
+  })
+
+# Format data for text labels
+txt_dat <- h_mat %>%
+  filter(mat_sample != ref_sample) %>%
+  group_by(assigned_type, mat_sample, ref_sample) %>%
+  summarize(
+    ref_type = ref_type[r == max(r)],
+    top_cor = round(max(r), 2),
+    .groups = "drop"
+  )
+  
+  # rowwise() %>%
+  # mutate(sams = str_c(sort(c(mat_sample, ref_sample)), collapse = "-")) %>%
+  # ungroup() %>%
+  # group_by(sams) %>%
+  
+# Create heatmaps
+h_mat %>%
+  filter(mat_sample != ref_sample) %>%
+  ggplot(aes(ref_type, assigned_type, fill = r)) +
+  geom_tile() +
+  
+  geom_text(
+    aes(label = top_cor, fill = NULL),
+    data = txt_dat
+  ) +
+  
+  scale_fill_gradientn(colours = c("white", "red")) +
+  facet_grid(mat_sample ~ ref_sample, scales = "free") +
+  djvdj_theme() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
 ```{r "type examples extended", fig.width = 10, fig.height = 6.5}
 # Create boxplots
 type_boxes <- gns %>%
@@ -2442,32 +2758,6 @@ so_int %>%
   qsave(here(params$so_dir, "so_int.qs"))
 ```
 
-```{r "HARMONY INTEGRATION", eval = FALSE}
-
-library(harmony)
-
-# so_merge <- merge(so_8, so_24)
-# 
-# rm(so_8, so_24)
-# 
-# so_merge <- so_merge %>%
-#   FindVariableFeatures() %>%
-#   ScaleData() %>%
-#   RunPCA() %>%
-#   RunHarmony("treatment") %>%
-#   RunUMAP(reduction = "harmony")
-
-so_merge <- merge(so_lec_8, so_lec_24) %>%
-  FindVariableFeatures() %>%
-  ScaleData() %>%
-  RunPCA() %>%
-  RunHarmony("treatment")
-
-so_merge <- so_merge %>%
-  RunUMAP(reduction = "harmony", dims = 1:40)
-
-```
-
 ```{r "cell type markers", fig.height = 21, fig.width = 20, eval = FALSE}
 feats <- c(
   "Ptprc",           # hematopoietic cells
@@ -2589,7 +2879,8 @@ degs <- deg_args %>%
     else                           typ <- ""
     
     prfx <- str_remove(args$so_in, "^so_")
-    file <- str_c(prfx, "_subtype_chikv", typ, "_markers.tsv")
+    # file <- str_c(prfx, "_subtype_chikv", typ, "_markers.tsv")
+    file <- str_c(prfx, "_lectype_chikv", typ, "_markers.tsv")
     file <- here("results/tables", file)
     
     d <- eval(sym(args$so_in)) %>%
@@ -2598,7 +2889,8 @@ degs <- deg_args %>%
         file    = file,
         ident_1 = args$ident_1,
         ident_2 = args$ident_2,
-        treat_clmn = args$treat_clmn
+        treat_clmn = args$treat_clmn,
+        type_clmn  = "lec_type"
       ) %>%
       list()
     
@@ -2636,6 +2928,7 @@ go <- go_degs %>%
     typ   <- str_remove(.y, ".+(?=-)")
     so_in <- str_remove(.y, "-.+$")
     prfx  <- str_remove(so_in, "^so_")
+    # file  <- str_c(prfx, "_lectype_chikv", typ, "_go")
     file  <- str_c(prfx, "_subtype_chikv", typ, "_go")
     file  <- here("results/tables", file)
     
@@ -2792,13 +3085,16 @@ examples_8 <- create_gene_plots(
   exp_data   = list("8hpi" = so_8, "24hpi" = so_merge),
   deg_data   = list("8hpi" = degs$`so_8-up`, "24hpi" = degs$`so_merge-up`),
   gns        = gns,
-  cell_types = 8,
-  clrs       = clrs_8
+  clrs       = clrs_8,
+  cell_types = 8
+  # cell_types = NULL,
+  # only_show_upreg = FALSE
 )
 ```
 
 ```{r "24hpi examples"}
 # Example genes to plot
+# HAND SELECTING SOME FAVORITES
 obj <- "so_merge-up"
 
 gns <- go[[obj]]@compareClusterResult %>%
@@ -2819,7 +3115,7 @@ top_sig <- degs[[obj]] %>%
 gns <- gns %>%
   left_join(top_sig, by = c(geneID = "gene")) %>%
   arrange(cluster, desc(n), pval) %>%
-  filter(geneID %in% c("Cxcl9", "Cxcl10", "Isg15", "Ccl7", "Gbp2", "Gbp6"))
+  filter(geneID %in% c("Cxcl9", "Cxcl10", "Ccl2", "Ccl7", "Gbp2", "Gbp6"))
 
 # gns %>%
 #   filter(grepl("C[xc][clr]|I[fs][irg]", geneID))
@@ -2831,8 +3127,10 @@ examples_24 <- create_gene_plots(
   exp_data   = list("8hpi" = so_8, "24hpi" = so_merge),
   deg_data   = list("8hpi" = degs$`so_8-up`, "24hpi" = degs$`so_merge-up`),
   gns        = gns,
-  cell_types = 8,
-  clrs       = clrs_24
+  clrs       = clrs_24,
+  cell_types = 8
+  # cell_types = NULL,
+  # only_show_upreg = FALSE,
 )
 ```
 
@@ -3085,7 +3383,7 @@ go_type[grepl("-all$", names(go_type))] %>%
     }
     
     print(plt)
-    cat("\n\n---\n\n<br>\n\n<br>")
+    cat("\n\n---\n\n<br>\n\n<br>\n\n")
   })
 ```
 
@@ -4212,7 +4510,658 @@ final_fig
 #   )
 ```
 
+---
+
 <br>
+
+<br>
+
+```{r "LEC integration", eval = FALSE}
+
+# Use original broad cell types based on clustering resolution 5
+# remove parenthesis from 8 hpi so format matches 24 hpi
+# add tm column to 24 hpi
+so_8  <- read_rds(file.path(params$orig_so_dir, "2021-07-16/sobjs/so.rds"))
+so_24 <- read_rds(file.path(params$orig_so_dir, "2021-01-08/sobjs/so.rds"))
+
+so_8 <- so_8 %>%
+  mutate_meta(
+    mutate,
+    cell_type = str_remove(cell_type, " \\(.+\\)$")
+  )
+
+so_24 <- so_24 %>%
+  mutate_meta(mutate, tm = "24hpi")
+
+# Create LEC objects
+# integrate treatments separately for timepoints
+so_lec <- list(`8hpi` = so_8, `24hpi` = so_24) %>%
+  map(subset, cell_type %in% lec_cell_types)
+
+so_lec <- so_lec %>%
+  map(~ {
+    .x %>%
+      mutate_meta(~ dplyr::select, -starts_with("UMAP_")) %>%
+      FindVariableFeatures(nfeatures = 2000) %>%
+      ScaleData() %>%
+      RunPCA() %>%
+      RunHarmony("treatment", plot_convergence = TRUE) %>%
+      RunUMAP(reduction = "harmony", dims = 1:40)
+  })
+
+so_lec <- so_lec %>%
+  map(~ {
+    dat <- .x %>%
+      FindNeighbors(reduction = "harmony", dims = 1:40) %>% 
+      FindClusters(resolution = c(1, 2, 4, 5))
+    
+    typs <- dat %>%
+      subset(treatment == "mock") %>%
+      clustify(
+        ref_mat     = ref_lec,
+        cluster_col = "RNA_snn_res.2",
+        n_genes     = 2000,
+        threshold   = 0.6
+      )
+    
+    typs <- typs@meta.data %>%
+      distinct(RNA_snn_res.2, type)
+    
+    typs <- set_names(typs$type, as.character(typs$RNA_snn_res.2))
+    
+    dat %>%
+      mutate_meta(mutate, lec_type = typs[as.character(RNA_snn_res.2)])
+  })
+
+# Combine integrated objects
+so_lec_merge <- merge(so_lec[[1]], so_lec[-1]) %>%
+  FindVariableFeatures(nfeatures = 2000) %>%
+  ScaleData() %>%
+  RunPCA() %>%
+  RunUMAP(reduction = "pca", dims = 1:40)
+
+so_lec_merge %>%
+  plot_scatter(
+    "subtype",
+    size = 0.5
+  ) +
+  facet_grid(tm ~ treatment)
+
+so_lec_merge %>%
+  plot_scatter(
+    "subtype",
+    size = 0.5,
+    group_col = "treatment"
+  )
+
+so_lec_merge %>%
+  plot_scatter(
+    "Marco",
+    size = 0.5,
+    group_col = "treatment",
+    plot_colors = c("lightblue", "red")
+  )
+
+so_lec_merge %>%
+  plot_scatter(
+    "Lyve1",
+    size = 0.5,
+    group_col = "treatment",
+    plot_colors = c("lightblue", "red")
+  )
+
+so_lec_merge %>%
+  plot_scatter(
+    "Madcam1",
+    size = 0.5,
+    group_col = "treatment",
+    plot_colors = c("lightblue", "red")
+  )
+
+so_lec$`24hpi` %>%
+  plot_scatter(
+    "lec_type",
+    size = 0.5
+  ) +
+  facet_grid(tm ~ treatment)
+
+so_lec$`24hpi` %>%
+  plot_scatter(
+    "Madcam1",
+    plot_colors = c("lightblue", "red"),
+    size = 0.5
+  ) +
+  facet_grid(tm ~ treatment)
+
+so_lec$`24hpi`@meta.data %>%
+  filter(!is.na(lec_type)) %>%
+  subset(lec_type != "BEC") %>%
+  plot_frequency("lec_type", "orig.ident", "treatment", p_method = "edgeR", p_label = "all")
+
+
+
+
+
+
+
+so_lec_merge %>%
+  plot_violin(cluster_col = "type", method = "boxplot", data_col = "Ptx3") +
+  facet_grid(tm ~ treatment)
+
+so_lec_merge %>%
+  plot_violin(cluster_col = "type", method = "boxplot", data_col = "Ackr4") +
+  facet_grid(tm ~ treatment)
+
+so_lec_merge %>%
+  plot_violin(cluster_col = "type", method = "boxplot", data_col = "Cd36") +
+  facet_grid(tm ~ treatment)
+
+
+
+
+
+so_lec_merge %>%
+  plot_scatter("lec_type", size = 0.5) +
+  facet_grid(tm ~ treatment)
+
+so_lec_merge %>%
+  subset(treatment == "CHIKV" & tm == "24hpi") %>%
+  plot_violin(cluster_col = "chikv_grp", method = "boxplot", data_col = "Marco") +
+  facet_grid(~ type)
+
+
+
+so_lec_merge %>%
+  plot_scatter("chikv_grp", size = 0.5, plot_lvls = "CHIKV-high") +
+  facet_grid(tm ~ treatment)
+
+so_lec_merge %>%
+  plot_scatter("Marco", size = 0.5, plot_colors = c("lightblue", "red")) +
+  facet_grid(tm ~ treatment)
+
+so_lec_merge %>%
+  plot_scatter("Pecam1", size = 0.5, plot_colors = c("lightblue", "red")) +
+  facet_grid(tm ~ treatment)
+
+so_lec_merge %>%
+  plot_scatter("Prox1", size = 0.5, plot_colors = c("lightblue", "red")) +
+  facet_grid(tm ~ treatment)
+
+so_lec_merge %>%
+  plot_scatter("Lyve1", size = 0.5, plot_colors = c("lightblue", "red")) +
+  facet_grid(tm ~ treatment)
+
+
+
+
+so_lec_merge %>%
+  subset(tm == "24hpi") %>%
+  plot_scatter("type", size = 0.2, group_col = "treatment")
+
+so_lec_merge %>%
+  subset(tm == "8hpi") %>%
+  plot_scatter("type", size = 0.2, group_col = "treatment")
+
+so_lec_merge %>%
+  subset(tm == "24hpi") %>%
+  plot_scatter("Madcam1", size = 0.2, group_col = "treatment", plot_colors = c("white", "red"), outline = T)
+
+so_lec_merge %>%
+  subset(tm == "24hpi") %>%
+  plot_scatter("Marco", size = 0.2, group_col = "treatment", plot_colors = c("white", "red"), outline = T)
+
+so_lec_merge %>%
+  subset(tm == "24hpi") %>%
+  plot_violin("Marco", "type", group_col = "treatment", method = "boxplot")
+
+so_lec_merge %>%
+  subset(tm == "24hpi") %>%
+  subset(treatment == "CHIKV") %>%
+  plot_violin("Marco", "type", group_col = "chikv_grp", method = "boxplot")
+
+so_lec_merge %>%
+  subset(tm == "24hpi") %>%
+  subset(treatment == "CHIKV") %>%
+  plot_violin("Madcam1", "type", group_col = "chikv_grp", method = "boxplot")
+
+```
+
+```{r "LEC ANNOTATIONS PARAMS", eval = FALSE}
+
+# Use original broad cell types based on clustering resolution 5
+# remove parenthesis from 8 hpi so format matches 24 hpi
+# add tm column to 24 hpi
+so_8  <- read_rds(file.path(params$orig_so_dir, "2021-07-16/sobjs/so.rds"))
+so_24 <- read_rds(file.path(params$orig_so_dir, "2021-01-08/sobjs/so.rds"))
+
+so_8 <- so_8 %>%
+  mutate_meta(
+    mutate,
+    cell_type = str_remove(cell_type, " \\(.+\\)$"),
+    chikv_grp = ifelse(tot_nCount_CHIKV > 0, "CHIKV-high", "CHIKV-low")
+  )
+
+so_24 <- so_24 %>%
+  mutate_meta(mutate, tm = "24hpi")
+
+# Create LEC objects
+# integrate treatments separately for timepoints
+so_lec <- list(`8hpi` = so_8, `24hpi` = so_24) %>%
+  map(subset, cell_type %in% lec_cell_types)
+
+so_lec_merge <- merge(so_lec[[1]], so_lec[-1]) %>%
+  mutate_meta(mutate, tm_grp = ifelse(tm == "24hpi" & treatment == "CHIKV", "late", "early")) %>%
+  FindVariableFeatures(nfeatures = 2000) %>%
+  ScaleData() %>%
+  RunPCA() %>%
+  RunHarmony(c("rep", "tm_grp"), dims = 1:40, plot_convergence = TRUE) %>%
+  RunUMAP(reduction = "harmony", dims = 1:40)
+
+# Parameters to test
+resolutions <- seq(3, 15, 0.5)
+n_genes     <- seq(500, 2000, 500)
+obj         <- "all"
+met         <- "spearman"
+bulk        <- "mean"
+clst_params <- as.list(expand_grid(resolutions, n_genes, obj, met, bulk))
+
+so_lec_merge <- so_lec_merge %>%
+  FindNeighbors(reduction = "harmony", dims = 1:40) %>%
+  FindClusters(resolution = resolutions)
+
+so_mock <- so_lec_merge %>%
+  mutate_meta(dplyr::select, -any_of(c("type", "r", "UMAP_1", "UMAP_2"))) %>%
+  subset(treatment == "mock")
+
+# Annotate LEC subsets
+param_results <- clst_params %>%
+  pmap_dfr(~ {
+    args  <- list(...)
+    rsln  <- args$resolutions
+    n_gns <- args$n_genes
+    
+    # Annotate cell types
+    clmn <- str_c("RNA_snn_res.", rsln)
+    
+    if (args$obj == "mock") obj <- so_mock
+    else                    obj <- so_lec_merge
+    
+    typs <- obj %>%
+      clustify(
+        ref_mat     = ref_lec,
+        cluster_col = clmn,
+        n_genes     = n_gns,
+        threshold   = 0.55,
+        # threshold   = 0.6,
+        compute_method    = args$met,
+        pseudobulk_method = args$bulk
+      )
+    
+    typs <- typs@meta.data %>%
+      distinct(!!sym(clmn), type)
+    
+    typs <- set_names(typs$type, as.character(pull(typs, clmn)))
+    
+    so_lec_merge <- so_lec_merge %>%
+      mutate_meta(mutate, type = typs[as.character(!!sym(clmn))])
+    
+    # Calculate stats
+    res <- so_lec_merge %>%
+      FetchData(c("type", "tm", "treatment", "chikv_grp", "Marco", "Madcam1", clmn)) %>%
+      as_tibble(rownames = ".cell_id")
+    
+    frac_few <- table(res[[clmn]])
+    frac_few <- frac_few[frac_few < 100]
+    n_few    <- sum(frac_few)
+    frac_few <- n_few / nrow(res)
+    
+    typ <- res %>%
+      group_by(tm, treatment, type) %>%
+      summarize(n_type = n(), .groups = "drop") %>%
+      group_by(tm, treatment) %>%
+      mutate(frac_type = n_type / sum(n_type)) %>%
+      ungroup()
+    
+    chikv <- res %>%
+      filter(tm == "24hpi", treatment == "CHIKV", chikv_grp == "CHIKV-high") %>%
+      group_by(type) %>%
+      summarize(n_chikv = n(), .groups = "drop") %>%
+      mutate(frac_chikv = n_chikv / sum(n_chikv)) %>%
+      ungroup()
+    
+    marks <- res %>%
+      group_by(tm, treatment, type) %>%
+      summarize(
+        Marco_mn    = mean(Marco),
+        Marco_med   = median(Marco),
+        Madcam1_mn  = mean(Madcam1),
+        Madcam1_med = median(Madcam1),
+        .groups = "drop"
+      ) %>%
+      group_by(tm, treatment) %>%
+      summarize(
+        Marco_mn    = type[Marco_mn == max(Marco_mn)],
+        Marco_med   = type[Marco_med == max(Marco_med)],
+        Madcam1_mn  = type[Madcam1_mn == max(Madcam1_mn)],
+        Madcam1_med = type[Madcam1_med == max(Madcam1_med)],
+        .groups = "drop"
+      )
+    
+    typ_diff <- so_lec_merge@meta.data %>%
+      group_by(tm, treatment, lec_type) %>%
+      summarize(n_old_type = n(), .groups = "drop")
+
+    res <- typ %>%
+      full_join(chikv, by = "type") %>%
+      full_join(marks, by = c("tm", "treatment")) %>%
+      full_join(typ_diff, by = c("tm", "treatment", c(type = "lec_type"))) %>%
+      mutate(
+        rsln     = clmn,
+        n_genes  = args$n_genes,
+        obj      = args$obj,
+        type_key = list(typs),
+        n_small_clusters    = n_few,
+        frac_small_clusters = frac_few
+      ) %>%
+      rowwise() %>%
+      mutate(
+        frac_old_diff = abs(diff(c(n_type, n_old_type))) / n_old_type
+      ) %>%
+      ungroup()
+    
+    res
+  })
+
+# Filter results
+test_res <- param_results %>%
+  # filter(n_genes == 1000, obj == "all") %>%    # 18 is closest to consensus
+  # filter(n_genes == 2000, obj == "all") %>%    # 17 is closest to consensus
+  
+  filter(n_genes == 1500, rsln == "RNA_snn_res.9.5", obj == "all") %>%      # cluster 7
+  # filter(n_genes == 2000, rsln == "RNA_snn_res.9", obj == "all") %>%      # cluster 9
+  
+  distinct(n_genes, obj, rsln, .keep_all = TRUE)
+
+  # filter(rsln == "RNA_snn_res.15") %>%
+  # group_by(rsln, n_genes, obj) %>%
+  # filter(
+  #   # (Marco_mn == "Marco_LEC" | Marco_med == "Marco_LEC"),
+  #   # all(Marco_mn[treatment == "mock"] == "Marco_LEC" | is.na(Marco_mn[treatment == "mock"])),
+  #   all(Madcam1_mn == "fLEC" | is.na(Madcam1_mn)),
+  #   type == "Marco_LEC",
+  #   n_chikv > 200
+  # ) %>%
+  # ungroup()
+
+# Example plots
+# plot selected examples
+test_plts <- ann_clst_res %>%
+  pmap(~ {
+    args <- list(...)
+    
+    type_key  <- args$type_key
+    clst_clmn <- args$rsln
+    
+    so_ann <- so_lec_merge %>%
+      mutate_meta(mutate, type = type_key[as.character(!!sym(clst_clmn))])
+    
+    umap <- so_ann %>%
+      plot_scatter(
+        "type", size = 0.5,
+        plot_colors = c(Marco_LEC = "red", fLEC = "black")
+      ) +
+      facet_grid(tm ~ treatment)
+    
+    bx1 <- so_ann %>%
+      plot_violin(
+        cluster_col = "type", method = "boxplot", data_col = "Marco",
+        plot_colors = c(Marco_LEC = "red", fLEC = "black")
+      ) +
+      facet_grid(tm ~ treatment)
+    
+    bx2 <- so_ann %>%
+      plot_violin(
+        cluster_col = "type", method = "boxplot", data_col = "Madcam1",
+        plot_colors = c(Marco_LEC = "red", fLEC = "black")
+      ) +
+      facet_grid(tm ~ treatment)
+    
+    bx3 <- so_ann %>%
+      subset(treatment == "CHIKV") %>%
+      plot_violin("Marco", "chikv_grp", method = "boxplot") +
+      facet_grid(tm ~ type)
+    
+    res <- plot_grid(bx1, bx2, ncol = 1)
+    res <- plot_grid(umap, res, nrow = 1)
+    res <- plot_grid(res, bx3, ncol = 1, rel_heights = c(1, 0.7))
+    
+    res
+  })
+
+# Determine consensus annotations
+# determine which annotations are most consistent for each cell
+# calculate stats for annotations
+ann_key <- param_results %>%
+  distinct(type_key, rsln, n_genes, obj) %>%
+  mutate(id = row_number()) %>%
+  filter(obj == "all")
+
+ann_df <- so_lec_merge@meta.data %>%
+  as_tibble(rownames = ".cell_id") %>%
+  dplyr::select(.cell_id, starts_with("RNA_snn_res."), "tm", "orig.ident", "treatment", "lec_type")
+
+ann_key %>%
+  pwalk(~ {
+    args <- list(...)
+    
+    new_clmn <- str_c("type-", args$rsln, "-", args$n_genes)
+    
+    ann_df <<- ann_df %>%
+      mutate(!!sym(new_clmn) := args$type_key[as.character(!!sym(args$rsln))])
+  })
+
+ann_stats <- ann_df %>%
+  dplyr::select(.cell_id, starts_with("type-")) %>%
+  pivot_longer(starts_with("type-")) %>%
+  
+  group_by(.cell_id) %>%
+  summarize(
+    count = list(table(value)),
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  rowwise() %>%
+  mutate(
+    top_ann  = names(head(sort(count, decreasing = TRUE), 1)),
+    sec_ann  = names(tail(head(sort(count, decreasing = TRUE), 2), 1)),
+    top_n    = max(count),
+    top_frac = top_n / n,
+    ann_n    = length(count)
+  ) %>%
+  ungroup()
+
+top_typs <- set_names(ann_stats$top_ann, ann_stats$.cell_id)
+sec_typs <- set_names(ann_stats$sec_ann, ann_stats$.cell_id)
+top_frac <- set_names(ann_stats$top_frac, ann_stats$.cell_id)
+
+so_lec_merge <- so_lec_merge %>%
+  AddMetaData(top_typs, col.name = "top_type") %>%
+  AddMetaData(sec_typs, col.name = "sec_type") %>%
+  AddMetaData(top_frac, col.name = "top_frac")
+
+# Cluster cell type annotations
+# want to identify primary annotation schemes
+ann_mat <- ann_df %>%
+  dplyr::select(.cell_id, starts_with("type-"))
+
+ann_typs <- ann_mat %>%
+  dplyr::select(starts_with("type-")) %>%
+  as.matrix() %>%
+  as.factor() %>%
+  levels()
+
+ann_mat <- ann_mat %>%
+  mutate(across(starts_with("type-"), ~ as.numeric(factor(.x, ann_typs)))) %>%
+  column_to_rownames(".cell_id") %>%
+  as.matrix() %>%
+  t()
+
+ann_clsts <- kmeans(ann_mat, centers = 10)
+
+ann_clst_res <- tibble(
+  key = names(ann_clsts$cluster),
+  id  = unname(ann_clsts$cluster),
+  type = "all"
+) %>%
+  separate(key, into = c("blank", "rsln", "n_genes"), sep = "-") %>%
+  dplyr::select(-blank) %>%
+  group_by(id) %>%
+  dplyr::slice(1) %>%
+  ungroup()
+
+```
+
+```{r}
+
+# Use clustifyr params identified above
+# 2000 genes, resolution 11
+so_lec_merge <- so_lec_merge %>%
+  clustify(
+    ref_mat     = ref_lec,
+    cluster_col = "RNA_snn_res.11",
+    n_genes     = 2000,
+    threshold   = 0.55,
+    compute_method    = "spearman",
+    pseudobulk_method = "mean"
+  )
+
+so_lec_merge %>%
+  plot_scatter("type", size = 0.5) +
+  facet_grid(tm ~ treatment)
+
+# Adjust clusters based on Marco expression
+top_marco <- c("20", "104", "26", "78", "100", "69", "7")
+
+so_lec_merge %>%
+  plot_scatter("RNA_snn_res.11", size = 0.5, top = top_marco) +
+  facet_grid(tm ~ treatment)
+
+so_lec_merge <- so_lec_merge %>%
+  mutate_meta(
+    mutate,
+    new_type = ifelse(RNA_snn_res.11 %in% top_marco, "Marco_LEC", type)
+  )
+
+so_lec_merge %>%
+  plot_scatter("new_type", size = 0.5) +
+  facet_grid(tm ~ treatment)
+
+# Plot marker expression
+marks <- c("Marco", "Madcam1", "Ptx3", "Ackr4", "Cd36", "Icam1")
+
+plts <- marks %>%
+  map(~ {
+    u <- so_lec_merge %>%
+      plot_scatter(.x, size = 0.5, plot_colors = c("lightblue", "red")) +
+      facet_grid(tm ~ treatment)
+    
+    b <- so_lec_merge %>%
+      plot_violin(.x, "new_type", method = "boxplot") +
+      facet_grid(tm ~ treatment)
+    
+    plot_grid(u, b, ncol = 1)
+  })
+
+
+
+
+
+
+
+so_lec_merge %>%
+  plot_scatter("top_type", size = 0.5) +
+  facet_grid(tm ~ treatment)
+
+so_lec_merge %>%
+  plot_scatter("sec_type", size = 0.5) +
+  facet_grid(tm ~ treatment)
+
+so_lec_merge %>%
+  plot_scatter("Madcam1", size = 0.5) +
+  facet_grid(tm ~ treatment)
+
+so_lec_merge %>%
+  plot_scatter("lec_type", size = 0.5) +
+  facet_grid(tm ~ treatment)
+
+so_lec_merge %>%
+  subset(tm == "24hpi" & top_type != "BEC") %>%
+  plot_frequency("top_type", "orig.ident", "treatment")
+
+
+
+
+
+
+# Refine annotations
+# 11, 1500, all
+# so_lec_merge <- so_lec_merge %>%
+so_lec_merge %>%
+  plot_scatter("lec_type", size = 0.5) +
+  facet_grid(tm ~ treatment)
+
+new_types <- test_res %>%
+  tail(1) %>%
+  pull(type_key) %>%
+  unlist()
+
+clmn <- test_res %>%
+  tail(1) %>%
+  pull(rsln)
+
+so_lec_merge <- so_lec_merge %>%
+  mutate_meta(mutate, new_type = new_types[as.character(!!sym(clmn))])
+
+so_lec_merge@meta.data %>%
+  filter(tm == "24hpi" & !is.na(new_type)) %>%
+  # subset(new_type != "BEC" & tm == "24hpi") %>%
+  plot_frequency("new_type", "orig.ident", "treatment", p_method = "edgeR")
+
+so_lec_merge %>%
+  subset(tm == "24hpi") %>%
+  plot_scatter("nFeature_RNA", group_col = "treatment")
+
+so_lec_merge %>%
+  subset(tm == "24hpi") %>%
+  plot_scatter("Marco", group_col = "treatment", plot_colors = c("lightblue", "red"))
+
+VariableFeatures(so_lec_merge)
+
+so_24 %>%
+  mutate_meta(mutate, new_type = ifelse(new_type == "BEC", new_type, "LEC")) %>%
+  plot_scatter(
+    "cell_type",
+    "Pecam1", "Pdpn",
+    group_col = "treatment"
+  )
+
+so_lec_merge %>%
+  mutate_meta(mutate, new_type = ifelse(new_type == "BEC", new_type, "LEC")) %>%
+  subset(tm == "24hpi" & new_type != "BEC" & treatment == "CHIKV" & lec_subtype != "unassigned") %>%
+  plot_scatter(
+    "chikv_grp",
+    "pct_CHIKV", "Marco",
+    group_col = "treatment"
+  )
+
+# so_lec_merge %>%
+#   plot_scatter(clst_clmn, size = 0.5, top = Inf) +
+#   facet_grid(tm ~ treatment) +
+#   theme(legend.position = "none")
+
+```
+
+
 
 
 
@@ -4740,6 +5689,7 @@ top_go %>%
 
 
 ```
+
 
 
 
