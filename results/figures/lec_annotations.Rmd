@@ -18,7 +18,7 @@ params:
   lec_res:      5                         # Clustering resolution for annotating LECs
   fib_res:      5                         # Clustering resolution for annotating fibroblasts/stromal cells
 editor_options: 
-  chunk_output_type: inline
+  chunk_output_type: console
 ---
 
 <br>
@@ -1978,6 +1978,51 @@ test_plts <- test_res %>%
     
     res
   })
+```
+
+```{r "INTEGRATE BROAD CELL TYPES", eval = FALSE}
+
+# Merge 8 and 24 hpi objects
+so_8  <- qread(so_8_dir)
+so_24 <- qread(so_24_dir)
+
+so_merge <- merge(so_8, so_24) %>%
+  FindVariableFeatures(nfeatures = 2000) %>%
+  ScaleData() %>%
+  RunPCA() %>%
+  RunUMAP(dims = 1:40)
+  
+# Integrate samples
+so_merge <- so_merge %>%
+  mutate_meta(
+    mutate,
+    integration_var = ifelse(
+      tm == "24hpi" & treatment == "CHIKV",
+      "chikv_24hpi", "other"
+    )
+  ) %>%
+  RunHarmony(
+    c("rep", "integration_var"),
+    dims = 1:40, plot_convergence = TRUE
+  ) %>%
+  RunUMAP(
+    dims = 1:40,
+    reduction      = "harmony",
+    reduction.name = "humap",
+    reduction.key  = "hUMAP_"
+  )
+
+so_merge %>%
+  qsave(file.path(params$so_dir, "so_merge_int.qs"), compress_level = 5L)
+
+# so_merge %>%
+#   plot_scatter(
+#     "cell_type",
+#     x = "harmony_1",
+#     y = "harmony_2",
+#     size = 0.1
+#   ) +
+#   facet_grid(tm ~ treatment)
 ```
 
 <br>
