@@ -1,118 +1,1272 @@
 
 ```{r "packages"}
+# plotting
+library(scales)
+library(ggrepel)
+library(ggtrace)
+library(patchwork)
+library(cowplot)
+library(colorblindr)
+library(ggtext)
+
+# analysis
+library(Seurat)
+library(harmony)
+library(clustifyr)
+library(clustifyrdata)
+library(DoubletFinder)
+library(M3Drop)
+library(CellChat)
+library(djvdj)
+library(presto)
+library(gprofiler2)
+library(qs)
+
+library(clusterProfiler)
+library(enrichplot)
+library(msigdbr)
+library(org.Mm.eg.db)
+library(GOSemSim)
+library(biomaRt)
+library(ggtree)
+
 # tidyverse
 library(tidyverse)
 library(here)
 library(knitr)
 library(broom)
 
-# plotting
-library(scales)
-library(ggrepel)
-library(patchwork)
-library(cowplot)
-library(colorblindr)
+source(here(params$src_dir, "funs.R"))
 
-# analysis
-library(Seurat)
-library(clustifyr)
-library(DoubletFinder)
-library(M3Drop)
-library(presto)
-library(gprofiler2)
-library(qs)
-
-source(here(params$template_dir, "funs.R"))
+chikv_grps <- c("CHIKV-low", "CHIKV-high")
 ```
 
-```{r "samples"}
-# Set directories
-proj      <- basename(here())
-res_dir   <- here(params$res_dir)
-table_dir <- here(res_dir, params$table_dir)
+```{r "functions"}
+type_lab_fn <- function(x) str_replace(x, "_", " ")
 
-so_dir <- file.path(
-  "~/Dropbox/Ryan/Projects", proj,
-  params$res_dir, params$so_dir
-)
-
-# Identify samples based on directories in params$res_dir
-.list_dirs <- function(dir, recursive = FALSE, include_names = TRUE, ...) {
-  res <- list.dirs(here(dir), recursive = recursive, ...)
+plot_example_gene <- function(so_in, feat, grp, box_colors = NULL,
+                              umap_colors = c("#56B4E9", "white", "#D7301F")) {
   
-  if (include_names) names(res) <- basename(res)
+  dat <- so_in %>%
+    FetchData(c(feat, grp, "UMAP_1", "UMAP_2"))
+  
+  u <- dat %>%
+    arrange(!!sym(feat)) %>%
+    ggplot(aes(UMAP_1, UMAP_2, fill = !!sym(feat))) +
+    geom_point_trace(size = 0.25, stroke = 0.65) +
+    scale_fill_gradientn(colours = umap_colors) +
+    guides(fill = guide_colorbar(
+      ticks          = FALSE,
+      barheight      = unit(10, "pt"),
+      barwidth       = unit(140, "pt"),
+      title.position = "top"
+    )) +
+    umap_theme +
+    theme(
+      legend.position      = "top",
+      legend.title         = element_text(hjust = 0.5),
+      legend.justification = 0.5,
+      panel.border         = element_rect(fill = NA, color = "grey85")
+    )
+  
+  
+  lvls <- dat %>%
+    group_by(!!sym(grp)) %>%
+    summarize(
+      med   = median(!!sym(feat)),
+      stats = list(boxplot.stats(!!sym(feat))),
+      q3    = map_dbl(stats, ~ .x$stats[4]),
+      q4    = map_dbl(stats, ~ .x$stats[5]),
+      max   = max(!!sym(feat)),
+      .groups = "drop"
+    ) %>%
+    arrange(med, q3, q4, max) %>%
+    pull(grp) %>%
+    rev()
+  
+  b <- dat %>%
+    plot_violin(
+      feat, grp,
+      plot_colors   = box_colors,
+      plot_lvls     = lvls,
+      method        = "boxplot",
+      outlier.size  = 0.25,
+      outlier.alpha = 1
+    ) +
+    theme(
+      legend.position = "none",
+      aspect.ratio = 0.21,
+      axis.text.x  = element_text(angle = 45, hjust = 1),
+      axis.line.y  = element_line(size = 0.5, color = "grey85"),
+      axis.ticks.x = element_blank(),
+      panel.border = element_blank(),
+      axis.title.x = element_blank()
+    )
+  
+  plot_grid(
+    u, b,
+    ncol        = 1,
+    rel_heights = c(1, 0.5),
+    align       = "v",
+    axis        = "rl"
+  )
+}
+
+create_cor_heatmap <- function(df_in, ttl, lec_labs = NULL, ln_clr = fade_0) {
+  
+  # # Cell type labels
+  # lec_labs <- df_in %>%
+  #   format_labels(
+  #     lab_clmn = "lec_type",
+  #     char_vec = new_cell_labs,
+  #     expr_vec = marco_expr
+  #   )
+  # 
+  # ref_labs <- c(
+  #   Valve      = "Valve LEC",
+  #   Collecting = "Collecting LEC",
+  #   Ptx3_LEC   = "Ptx3 LEC",
+  #   Marco_LEC  = parse(text = marco_expr)
+  # )
+  
+  if (!is.null(lec_labs)) {
+    df_in <- df_in %>%
+      filter(assigned_type %in% names(lec_labs()))
+  }
+  
+  # Data for tile labels
+  lab_df <- df_in %>%
+    group_by(assigned_type) %>%
+    slice_max(r, n = 1) %>%
+    ungroup()
+  
+  # Create heatmaps
+  res <- df_in %>%
+    ggplot(aes(ref_type, assigned_type, fill = r)) +
+    geom_tile(color = ln_clr, size = 0.2) +
+    
+    geom_text(
+      aes(label = round(r, 2)),
+      data  = lab_df,
+      color = "black",
+      size  = txt_pt1 / .pt
+    ) +
+    
+    guides(fill = bar_gd()) +
+    
+    scale_fill_gradientn(colors = c(fade_0, "#E69F00")) +
+    # scale_x_discrete(labels = ref_labs) +
+    # scale_y_discrete(labels = lec_labs) +
+    
+    labs(title = ttl, x = "reference", y = "assigned type") +
+    
+    base_theme +
+    theme(
+      legend.text = element_text(size = txt_pt1),
+      axis.line.x = element_blank(),
+      axis.line.y = element_blank(),
+      axis.text.x = element_text(hjust = 1, angle = 45, size = txt_pt1),
+      axis.text.y = element_text(hjust = 1, size = txt_pt1),
+      axis.title  = element_text(size = txt_pt2),
+      plot.title  = element_text(size = ttl_pt1)
+    )
+  
+  if (!is.null(lec_labs)) {
+    res <- res +
+      scale_y_discrete(labels = lec_labs)
+  }
   
   res
 }
 
-samples <- .list_dirs(res_dir) %>%
-  map(~ {
-    .x %>%
-      .list_dirs() %>%
-      map_chr(~ file.path(.x, "outs/filtered_feature_bc_matrix"))
-  })
+create_gene_boxplot <- function(input, GENE, TYPE, clr = lec_type_cols[[TYPE]],
+                                pval_y = 5) {
+  
+  # Format plot data
+  dat <- input %>%
+    FetchData(c("lec_type", "treatment", "rep", "orig.ident", "chikv_grp", GENE)) %>%
+    filter(lec_type == TYPE) %>%
+    mutate(chikv_grp = ifelse(treatment == "mock", treatment, chikv_grp))
+  
+  clrs <- set_names(
+    c("grey", rep(clr, 2)),
+    unique(dat$chikv_grp)
+  )
+  
+  # Calculate p-values
+  p_vals <- dat %>%
+    calc_p_vals(
+      data_column = GENE,
+      type_column = "chikv_grp"
+    )
+  
+  comps <- names(clrs) %>%
+    combn(2, simplify = FALSE)
+  
+  comps <- list(
+    x    = map_chr(comps, pluck, 1),
+    xend = map_chr(comps, pluck, 2),
+    y    = c(pval_y, pval_y + pval_y * 0.12, pval_y)
+  )
+  
+  # Create boxplots
+  res <- dat %>%
+    plot_violin(
+      GENE, "chikv_grp",
+      method        = "boxplot",
+      plot_colors   = clrs,
+      plot_lvls     = names(clrs),
+      alpha         = c(0.5, 0.1, 0.5),
+      size          = 1,
+      outlier.size  = 1.5,
+      outlier.alpha = 1,
+      width         = 0.6
+    ) +
+    labs(title = TYPE, y = str_c(GENE, " expression")) +
+    base_theme +
+    theme(
+      legend.position = "none",
+      aspect.ratio = 1.5,
+      plot.title   = element_text(size = ttl_pt2 * 1.5),
+      axis.title.y = element_text(size = ttl_pt2),
+      axis.title.x = element_blank(),
+      axis.text.x  = element_text(size = ttl_pt2, hjust = c(0.75, 0.5, 0.25)),
+      plot.margin  = margin(5, 10, 5, 5)
+    )
+  
+  # Add p-values to plot
+  comps %>%
+    pwalk(~ {
+      v_args <- list(...)[c("x", "xend")]
+      
+      p <- p_vals %>%
+        filter(`Cell type 1` %in% v_args & `Cell type 2` %in% v_args) %>%
+        pull(p_adj)
+      
+      res <<- res %>%
+        add_pvals(
+          ...,
+          p_val    = p,
+          size     = txt_pt2 / .pt,
+          line_col = "grey75"
+        )
+    })
+  
+  res
+}
 
-# Separate enriched libraries
-enrich_pat <- "-enrichment$"
+create_example_gene_fig <- function(df_in, gns, x_clmn, clrs = lec_type_cols,
+                                    ttl = NULL) {
+  res <- gns %>%
+    imap(~ {
+      lvls <- df_in %>%
+        group_by(!!sym(x_clmn), tm_treat) %>%
+        summarize(
+          n     = n(),
+          stats = list(boxplot.stats(!!sym(.x))),
+          med   = map_dbl(stats, ~ .x$stats[3]),
+          q3    = map_dbl(stats, ~ .x$stats[4]),
+          q4    = map_dbl(stats, ~ .x$stats[5]),
+          mx    = max(!!sym(.x)),
+          .groups = "drop"
+        ) %>%
+        group_by(!!sym(x_clmn)) %>%
+        summarize(across(c(med, q3, q4, mx), mean)) %>%
+        arrange(med, q3, q4, mx) %>%
+        pull(x_clmn) %>%
+        rev()
+      
+      plt <- df_in %>%
+        mutate(
+          x_type    = fct_relevel(!!sym(x_clmn), lvls),
+          chikv_grp = fct_relevel(chikv_grp, chikv_grps)
+        ) %>%
+        ggplot(
+          # aes(x_type, !!sym(.x), color = x_type, fill = x_type, alpha = chikv_grp)
+          aes(x_type, !!sym(.x), color = x_type, fill = x_type)
+        ) +
+        geom_boxplot(
+          linewidth = 0.5, alpha = 0.5,  # color = "black",
+          outlier.size = 0.01, outlier.alpha = 0.1,
+          position = position_dodge2(preserve = "single"),
+          key_glyph = draw_key_point,
+        ) +
+        scale_color_manual(values = clrs) +
+        scale_fill_manual(values = clrs) +
+        scale_alpha_manual(values = c(`CHIKV-low` = 0.5, `CHIKV-high` = 1)) +
+        scale_x_discrete(labels = type_lab_fn) +
+        facet_wrap(~ tm_treat, ncol = 1) +
+        labs(y = str_c(.x, " expression")) +
+        guides(
+          fill = "none", color = "none",
+          alpha = guide_legend(
+            override.aes = list(shape = 15, fill = "black", size = 4)
+          )
+        ) +
+        # base_theme +
+        djvdj_theme() +
+        theme(
+          aspect.ratio    = 0.15,
+          plot.title      = element_text(hjust = 0.5),
+          legend.position = "top",
+          legend.title    = element_blank(),
+          # legend.text     = element_text(size = txt_pt1),
+          axis.title.x    = element_blank(),
+          axis.text.x     = element_text(angle = 45, hjust = 1),
+          # axis.text.y     = element_text(size = txt_pt1 * 0.75),
+          # strip.text      = element_text(size = txt_pt2)
+        )
+      
+      if (.y == 1 && !is.null(ttl)) {
+        plt <- plt + ggtitle(ttl)
+      }
+      
+      plt
+    })
+  
+  res
+}
 
-enriched <- samples[grepl(enrich_pat, names(samples))]
-samples  <- samples[!names(samples) %in% names(enriched)]
+.format_pvalue <- function(p, digits = 1, cutoffs = NULL) {
 
-names(enriched) <- names(enriched) %>%
-  str_remove(enrich_pat)
+  # Set p label based on vector of cutoffs
+  if (!is.finite(p)) return(as.character(NA))
 
-# USE ORIGINAL CELLRANGER RUNS
-samples$`24hpi` <- samples$orig_24hpi
+  if (!is.null(cutoffs)) {
+    if (any(duplicated(cutoffs))) {
+      cli::cli_abort("Cutoff values for p_label must be unique.")
+    }
 
+    # Set default labels when not provided by user
+    if (is.null(names(cutoffs))) {
+      cutoffs <- sort(cutoffs, decreasing = TRUE)
+
+      names(cutoffs) <- purrr::imap_chr(
+        cutoffs, ~ paste0(rep("*", .y), collapse = "")
+      )
+    }
+
+    cutoffs <- sort(cutoffs)
+    p_label <- as.character(NA)
+
+    for (val in names(cutoffs)) {
+      if (p < cutoffs[val]) {
+        p_label <- val
+
+        break()
+      }
+    }
+
+    # Treat "value" as a keyword that will allow user to display actual
+    # p-value for a certain cutoff
+    # All custom labels need to be wrapped in quotes for parsing
+    if (!identical(p_label, "value")) {
+      if (!is.na(p_label)) p_label <- paste0("\'", p_label, "\'")
+
+      return(p_label)
+    }
+  }
+
+  # Format p-value label
+  if (p >= 0.1)    return(as.character(round(p, 1)))
+  else if (p == 0) return(as.character(p))
+
+  p <- scales::label_scientific(digits = digits)(p)
+
+  ex <- str_extract_all(p, "[+\\-][0-9]+$")
+
+  p <- sub(paste0("\\", ex, "$"), "", p)
+
+  ex <- as.numeric(ex)
+  ex <- as.character(ex)
+
+  p <- sub("e", "*x*10^", p)
+  p <- paste0(p, ex)
+
+  p
+}
+
+create_example_gene_fig2 <- function(df_in, gns, x_clmn, al_clmn,
+                                     plot_lvls = NULL, clrs = lec_type_cols,
+                                     ttl = NULL) {
+  
+  vars <- unique(df_in[[al_clmn]])
+  
+  p_cuts <- c(0.01, 0.001, 0.0001)
+  
+  res <- gns %>%
+    imap(~ {
+      # Calculate p-values
+      # ONLY SHOW <0.01
+      p_dat <- df_in %>%
+        mutate(x_type = !!sym(x_clmn)) %>%
+        group_by(x_type) %>%
+        filter(n_distinct(!!sym(al_clmn)) == 2) %>%
+        summarize(
+          p = wilcox.test(
+            (!!sym(.x))[!!sym(al_clmn) == vars[1]],
+            (!!sym(.x))[!!sym(al_clmn) == vars[2]]
+          )$p.value,
+          .groups = "drop"
+        ) %>%
+        filter(!is.na(p)) %>%
+        mutate(p_adj = p.adjust(p)) %>%
+        rowwise() %>%
+        mutate(p_lab = .format_pvalue(p_adj, cutoffs = p_cuts)) %>%
+        ungroup()
+        # filter(p_adj < 0.01)
+      
+      # Set plot levels
+      lvls <- df_in %>%
+        group_by(!!sym(x_clmn), tm_treat) %>%
+        summarize(
+          n     = n(),
+          stats = list(boxplot.stats(!!sym(.x))),
+          med   = map_dbl(stats, ~ .x$stats[3]),
+          q3    = map_dbl(stats, ~ .x$stats[4]),
+          q4    = map_dbl(stats, ~ .x$stats[5]),
+          mx    = max(!!sym(.x)),
+          .groups = "drop"
+        ) %>%
+        group_by(!!sym(x_clmn)) %>%
+        summarize(across(c(med, q3, q4, mx), mean)) %>%
+        arrange(med, q3, q4, mx) %>%
+        pull(x_clmn) %>%
+        rev()
+      
+      lvls <- unique(c(plot_lvls, lvls))
+      
+      # Create boxplots
+      plt <- df_in %>%
+        mutate(
+          x_type    = fct_relevel(!!sym(x_clmn), lvls),
+          chikv_grp = fct_relevel(chikv_grp, chikv_grps),
+          treatment = fct_relevel(treatment, treats)
+        ) %>%
+        ggplot(
+          aes(x_type, !!sym(.x), color = x_type, fill = x_type, alpha = !!sym(al_clmn))
+        ) +
+        geom_boxplot(
+          linewidth = 0.5,
+          outlier.size = 0.2, outlier.alpha = 0.1,
+          position = position_dodge2(preserve = "single"),
+          key_glyph = draw_key_point,
+        ) +
+        scale_color_manual(values = clrs) +
+        scale_fill_manual(values = clrs) +
+        scale_alpha_manual(values = c(mock = 0.25, CHIKV = 0.75)) +
+        scale_x_discrete(labels = type_lab_fn) +
+        facet_wrap(~ tm, ncol = 1) +
+        labs(y = str_c(.x, " expression")) +
+        guides(
+          fill = "none", color = "none",
+          alpha = guide_legend(
+            override.aes = list(shape = 15, fill = "black", size = 4)
+          )
+        ) +
+        djvdj_theme() +
+        theme(
+          # aspect.ratio    = 0.25,
+          plot.title      = element_text(hjust = 0.5),
+          legend.position = "top",
+          legend.title    = element_blank(),
+          # legend.text     = element_text(size = txt_pt1),
+          axis.title.x    = element_blank(),
+          axis.text.x     = element_text(angle = 45, hjust = 1),
+          # axis.text.y     = element_text(size = txt_pt1 * 0.75),
+          strip.text      = element_text(size = txt_pt2)
+        )
+      
+      # Add p-values
+      plt <- plt +
+        geom_text(
+          aes(y = Inf, fill = NULL, label = p_lab),
+          data  = p_dat,
+          vjust = 1.5,
+          color = "black",
+          alpha = 1,
+          parse = TRUE,
+          size  = 16 / .pt
+        ) +
+        scale_y_continuous(expand = expansion(c(0.05, 0.15)))
+      
+      if (.y == 1 && !is.null(ttl)) {
+        plt <- plt + ggtitle(ttl)
+      }
+      
+      plt
+    })
+  
+  res
+}
+
+#' Fill the upper triangular matrix completely
+#' 
+#' FROM ENRICHPLOT
+#'
+#' @param x termsim similarity matrix
+#' @param keep GO terms to keep
+#' @return a data.frame
+#' @noRd
+fill_termsim <- function(x, keep = NULL) {
+  if (!is.null(keep)) termsim <- x[keep, keep]
+  else                termsim <- x
+  
+  termsim[which(is.na(termsim))] <- 0
+  
+  termsim2 <- termsim + t(termsim)
+  
+  for ( i in seq_len(nrow(termsim2))) termsim2[i, i] <- 1
+  
+  termsim2
+}
+
+#' Fetch genes for the provided annotations
+fetch_genes <- function(terms, mart) {
+  att  <- c("ensembl_gene_id", "external_gene_name")
+  names(terms) <- names(terms) %||% rep("go_parent_name", length(terms))
+  names(terms)[names(terms) == ""] <- "go_parent_name"
+
+  res <- terms %>%
+    imap(~ {
+      biomaRt::getBM(
+        attributes = att,
+        filters    = .y,
+        values     = .x,
+        mart       = mart
+      ) %>%
+        pull(external_gene_name)
+    }) %>%
+    reduce(c) %>%
+    unique()
+
+  res
+}
+
+#' Identify DEGs
+#' 
+#' @param so_in Seurat object to use for identifying DEGs
+#' @param ident_1 Cell label to use for comparing gene expression
+#' @param ident_2 Cell label to compare with ident_1
+#' @param pval p-value cutoff for filtering DEGs
+#' @param log_fc Vector containing upper and lower fold change cutoffs to use
+#' for filtering DEGs
+#' @param type_clmn Column in object containing cell types, DEGs will be
+#' identified separately for each cell type
+#' @param treat_clmn Column in object containing ident_1 and ident_2 labels
+#' @param rep_clmn Column in object containing replicate IDs
+#' @param exclude_types Vector containing cell types to exclude from analysis
+#' @param file Path to output file to use for saving results
+get_degs <- function(so_in, ident_1 = "CHIKV", ident_2 = "mock",
+                     pval = 0.05, log_fc = c(0.15, Inf),
+                     type_clmn = "subtype", treat_clmn = "treatment",
+                     rep_clmn = "rep", exclude_types = c("other", "unassigned"),
+                     file = NULL) {
+  
+  Idents(so_in) <- unlist(so_in[[treat_clmn]], use.names = FALSE)
+  
+  so_in <- so_in %>%
+    mutate_meta(mutate, treat_rep = str_c(!!sym(treat_clmn), !!sym(rep_clmn)))
+  
+  typs <- get_cell_types(so_in, "subtype", "treat_rep")
+  typs <- typs[!typs %in% exclude_types]
+  
+  if (!is.null(file) && file.exists(file)) {
+    cli::cli_alert("Loading file {.file {file}}")
+    
+    return(read_tsv(file))
+  }
+  
+  degs <- typs %>%
+    map_dfr(~ {
+      so_in %>%
+        subset(subtype == .x) %>%
+        FindConservedMarkers(
+          ident.1         = ident_1,
+          ident.2         = ident_2,
+          grouping.var    = rep_clmn,
+          logfc.threshold = min(abs(log_fc)),
+          min.cells.group = 3
+        ) %>%
+        mutate(subtype = .x) %>%
+        as_tibble(rownames = "gene")
+    })
+  
+  reps     <- unique(unlist(so_in[[rep_clmn]], use.names = FALSE))
+  fc_clmns <- str_c(reps, "_avg_log2FC")
+  
+  # Filter DEGs
+  degs <- degs %>%
+    filter(
+      if_all(all_of(fc_clmns), ~ .x > log_fc[1] & .x < log_fc[2]),
+      max_pval < pval
+    ) %>%
+    arrange(max_pval)
+
+  if (!is.null(file)) {
+    write_tsv(degs, file)
+  }
+  
+  degs
+}
+
+#' Identify GO terms
+#' 
+#' By default all expressed genes are used as background for the cell type
+#' This will include results for all terms regardless of significance, need
+#' all terms for creating heatmaps
+#' 
+#' @param gns Named list of differentially expressed genes for each cell type
+#' @param so_in Seurat object so use for determining background gene set
+#' @param type_clmn Column in Seurat object containing cell types, these should
+#' match the cell types provided by gns
+#' @param max_term_size Maximum term size to include in results
+#' @param min_term_size Minimum term size to include in results
+#' @param db GO database to use, specify 'ALL' to use all three
+#' @param simplify_terms Should GO terms be simplified to removed redundant
+#' results, this has a significant effect on performance
+#' @param n_bkgd Number of top expressed genes to include for the background
+#' gene set
+#' @param exclude_genes Regular expression to use for removing genes before
+#' performing GO analysis
+#' @param sim_data Similarity data to use for simplifying GO terms, generated
+#' using [clusterProfiler::godata()]
+#' @param file Path to output file for saving results
+get_go <- function(gns, so_in, type_clmn = "subtype", max_term_size = 750,
+                   min_term_size = 10, db = "BP", simplify_terms = TRUE,
+                   n_bkgd = Inf, exclude_genes = "^(Rp[sl]|mt-)",
+                   sim_data = go_sim_data, file = NULL) {
+
+  # Check for save GO file
+  obj_file <- str_c(file, ".qs")
+  tbl_file <- str_c(file, ".tsv")
+  
+  if (!is.null(file) && file.exists(obj_file)) {
+    cli::cli_alert("Loading file {.file {obj_file}}")
+    
+    return(qread(obj_file))
+  }
+  
+  # Identify background gene set for each cell type
+  bkgd <- gns %>%
+    imap(~ {
+      bkgd <- NULL
+      
+      if (!is.null(so_in)) {
+        if (is.character(.y)) bkgd <- subset(so_in, !!sym(type_clmn) == .y)
+        else                  bkgd <- so_in
+        
+        bkgd <- bkgd@assays$RNA@data %>%
+          rowMeans() %>%
+          sort(decreasing = TRUE) %>%
+          head(n_bkgd)
+        
+        bkgd <- names(bkgd[bkgd > 0])
+      }
+      
+      bkgd
+    })
+  
+  # Identify GO terms for each gene list
+  # exclude specified genes
+  go <- gns %>%
+    imap(~ {
+      .x <- .x[!grepl(exclude_genes, .x)]
+      
+      g <- .x %>%
+        enrichGO(
+          keyType      = "SYMBOL",
+          OrgDb        = org.Mm.eg.db,
+          universe     = bkgd[[.y]],
+          maxGSSize    = max_term_size,
+          minGSSize    = min_term_size,
+          pvalueCutoff = 1.1,
+          qvalueCutoff = 1.1,
+          ont          = db
+        )
+      
+      # Add background genes for each term to object
+      # need this to calculate overall fold enrichment for GO clusters
+      bkgd_gns <- g@result$ID %>%
+        bitr(
+          fromType = "GOALL", toType = "SYMBOL",
+          OrgDb = org.Mm.eg.db
+        ) %>%
+        filter(SYMBOL %in% bkgd[[.y]]) %>%
+        split(.$GOALL)
+      
+      bkgd_gns <- bkgd_gns %>%
+        map_chr(~ {
+          .x$SYMBOL %>%
+            unique() %>%
+            str_c(collapse = "/")
+        })
+      
+      g %>%
+        mutate(bkgdID = bkgd_gns[ID])
+    })
+  
+  # Merge GO objects  
+  if (!is.null(names(go))) {
+    go <- merge_result(go)
+    
+    go@fun <- "enrichGO"
+    
+  } else if (length(go) == 1) {
+    go <- go[[1]]
+  }
+  
+  # Simplify terms
+  # this collapses terms that are very similar
+  if (simplify_terms) {
+    go <- go %>%
+      clusterProfiler::simplify(semData = sim_data)
+  }
+  
+  # Save results
+  if (!is.null(file)) {
+    qsave(go, obj_file)
+    
+    go@compareClusterResult %>%
+      write_tsv(tbl_file)
+  }
+  
+  go
+}
+
+#' Cluster GO terms
+#' 
+#' @param go_in Object containing GO results
+#' @param k Number of clusters to identify
+#' @param pval Cutoff for filtering terms based on adjusted p-value, only
+#' significant terms are used for clustering
+#' @param qval Cutoff for filtering terms based on q-value
+#' @param n_overlap Minimum number of genes needed to overlap term for it to be
+#' included for clustering
+#' @param n_shared Minimum number of cell types that term has to be shared with
+#' for it to be included for clustering
+#' @param sim_data Similarity data to use for clustering GO terms, generated
+#' using [clusterProfiler::godata()]
+get_clusters <- function(go_in, k = 3, pval = 0.05, qval = 0.2, n_overlap = 3,
+                         n_shared = 2, sim_data = go_sim_data) {
+  
+  # Filter GO terms
+  # calculate summary stats for each term
+  # sort by number of cell types that share the term
+  go_in <- go_in %>%
+    filter(p.adjust < pval, qvalue < qval, Count >= n_overlap)
+  
+  top_terms <- go_in@compareClusterResult %>%
+    separate(GeneRatio, into = c("n_ovlp", "tot_genes"), sep = "/", convert = TRUE) %>%
+    separate(BgRatio, into = c("n_bg_ovlp", "tot_bg_genes"), sep = "/", convert = TRUE) %>%
+    mutate(
+      GeneRatio  = n_ovlp / tot_genes,
+      BgRatio    = n_bg_ovlp / tot_bg_genes,
+      enrichment = GeneRatio / BgRatio
+    ) %>%
+    
+    group_by(Description, ID) %>%
+    summarize(
+      n          = n_distinct(Cluster),  # number of cell types with term
+      enrichment = mean(enrichment),      
+      p.adjust   = mean(p.adjust),       # mean p-value across cell types
+      qvalue     = mean(qvalue),         # mean q-value across cell types
+      .groups    = "drop"          
+    ) %>%
+    arrange(desc(n), p.adjust) %>%
+    dplyr::filter(n >= n_shared)
+
+  # Set number of clusters
+  # must average > 2 terms per cluster
+  if (nrow(top_terms) < 2) return(NULL)
+  
+  k <- min(k, floor(nrow(top_terms) / 2))
+  
+  # Calculate similarity metric for top terms
+  # fill in upper triangle of matrix and filter terms
+  # only include significant terms shared with at least two cell types
+  go_dist <- go_in %>%
+    pairwise_termsim(semData = sim_data) %>%
+    .@termsim %>%
+    fill_termsim(keep = top_terms$Description)
+  
+  # Cluster terms
+  # use ward.D method to avoid overlapping ancestor nodes of each group
+  hc <- stats::hclust(
+    stats::as.dist(1 - go_dist),
+    method = "ward.D"
+  )
+  
+  clst_obj <- stats::cutree(hc, k)
+  
+  clsts <- tibble(
+    Description = names(clst_obj),
+    cluster     = unname(clst_obj)
+  )
+  
+  # Format output object
+  res <- clsts %>%
+    left_join(top_terms, by = "Description") %>%
+  
+    arrange(cluster, desc(n), p.adjust) %>%
+    group_by(cluster) %>%
+    mutate(
+      cluster_n_terms = n_distinct(Description),
+      cluster_mean_p  = mean(p.adjust)
+    ) %>%
+    ungroup() %>%
+    arrange(cluster, desc(n), p.adjust)
+  
+  res <- list(
+    clusters = res,
+    object   = hc,
+    clusters_object = clst_obj
+  )
+  
+  res
+}
+
+#' Create heatmaps summarizing GO clusters for each cell type
+#' 
+#' @param df_in data.frame containing clustering results generated with
+#' get_clusters(), this provides the terms and cluster assignments to plot
+#' @param go_in Object containing GO results, this is used to plot p-values and
+#' GeneRatio for each cell type
+#' @param n_clusters Number of top GO clusters to plot, clusters are sorted by
+#' number of terms, with the top clusters having the most terms
+#' @param n_terms The number of top terms to show for each cluster, terms are
+#' sorted by the number of cell types that share the term and the overall mean
+#' p-value for the term (averaged across all cell types)
+#' @param pval Adjusted p-value cutoff for marking significant terms, this
+#' cutoff should match the cutoff used for clustering GO terms
+#' @param qval q-value cutoff for marking significant terms
+#' @param n_overlap Minimum number of genes needed to overlap the term for it to
+#' be marked as significant
+#' @param n_genes Minimum number of DEGs for cell type to be included on plot
+#' @param clrs Colors to use for each cluster
+#' @param n_col Number of columns to use for organizing facets (each cluster is
+#' plotted as a separate facet)
+#' @param cluster_labels Vector containing descriptive labels for each cluster
+create_go_heatmap <- function(df_in, go_in, n_clusters = 2, n_terms = 5,
+                              pval = 0.05, qval = 0.2, n_overlap = 3, n_genes = 3,
+                              clrs = c("orange", "lightblue", "red"), n_col = 1,
+                              include_overall_score = FALSE, free_y = FALSE,
+                              cluster_labels = NULL) {
+  
+  # Top GO terms to plot
+  # df_in includes combined GO terms identified across all cell types
+  # sort to show shared terms at the top, sort by mean adjusted p-value for term
+  top_clusters <- df_in$cluster %>%
+    table() %>%
+    sort(decreasing = TRUE) %>%
+    head(n_clusters) %>%
+    names()
+  
+  n_seq <- seq_len(n_terms)
+  
+  terms <- df_in %>%
+    dplyr::filter(cluster %in% top_clusters) %>%
+    mutate(shared = n > 1) %>%
+    arrange(cluster, desc(n), desc(enrichment)) %>%
+    # arrange(cluster, desc(n), p.adjust) %>%
+    # arrange(cluster, desc(shared), p.adjust) %>%
+    group_by(cluster) %>%
+    dplyr::slice(n_seq) %>%
+    ungroup()
+  
+  n_terms <- terms %>%
+    group_by(cluster) %>%
+    summarize(n = n_distinct(Description), .groups = "drop") %>%
+    pull(n) %>%
+    max()
+  
+  # Data for heatmap
+  cluster_ids <- df_in %>%
+    dplyr::select(Description, cluster)
+  
+  agg_lab <- "Overall Enrichment"
+  lvls    <- c(agg_lab, rev(terms$Description))
+  
+  dat <- go_in@compareClusterResult %>%
+    as_tibble() %>%
+    left_join(cluster_ids, by = "Description") %>%
+    filter(cluster %in% top_clusters) %>%
+    separate(GeneRatio, into = c("n_ovlp", "tot_genes"), sep = "/", convert = TRUE) %>%
+    separate(BgRatio, into = c("n_bg_ovlp", "tot_bg_genes"), sep = "/", convert = TRUE) %>%
+    mutate(
+      GeneRatio  = n_ovlp / tot_genes,
+      BgRatio    = n_bg_ovlp / tot_bg_genes,
+      enrichment = GeneRatio / BgRatio
+    )
+  
+  # Calculate aggregated fraction overlap
+  # only show cell types with >= 10 overlapping genes
+  agg_dat <- dat
+  
+  if (!include_overall_score) {
+    agg_dat <- agg_dat %>%
+      filter(Description %in% terms$Description)
+  }
+  
+  agg_dat <- agg_dat %>%
+    mutate(
+      geneID = str_split(geneID, "/"),
+      bkgdID = str_split(bkgdID, "/")
+    ) %>%
+    group_by(Cluster, cluster, tot_genes, tot_bg_genes) %>%
+    summarize(
+      tot_ovlp    = n_distinct(reduce(geneID, c)),
+      tot_bg_ovlp = n_distinct(reduce(bkgdID, c)),
+      .groups     = "drop"
+    ) %>%
+    mutate(
+      GeneRatio   = tot_ovlp / tot_genes,
+      BgRatio     = tot_bg_ovlp / tot_bg_genes,
+      enrichment  = GeneRatio / BgRatio,
+      Description = agg_lab
+    ) %>%
+    filter(tot_genes >= n_genes)
+  
+  # If not including overall score sort based on terms shown
+  typ_lvls <- agg_dat %>%
+    arrange(desc(enrichment)) %>%
+    mutate(Cluster = fct_inorder(as.character(Cluster))) %>%
+    pull(Cluster) %>%
+    levels() 
+  
+  dat <- dat %>%
+    filter(
+      Description %in% terms$Description,
+      Cluster %in% typ_lvls
+    )
+  
+  if (include_overall_score) {
+    dat <- dat %>%
+      bind_rows(agg_dat)
+  }
+  
+  dat <- dat %>%
+    mutate(Description = fct_relevel(Description, lvls)) %>%
+    arrange(Description) %>%
+    mutate(
+      Description = str_trunc(as.character(Description), width = 70, side = "right"),
+      Description = str_wrap(Description, width = 40),
+      Description = fct_inorder(Description),
+      Cluster     = fct_relevel(Cluster, typ_lvls)
+    )
+  
+  ## THIS COULD BE USED TO CALCULATE COMBINED SIGNIFICANCE
+  # Fill in missing values
+  # these are terms with 0 overlapping genes for the cell type
+  # assign p-value of 1 and gene ratio of 0
+  # dat <- dat %>%
+  #   complete(
+  #     crossing(Description, Cluster),
+  #     fill = list(GeneRatio = 0, p.adjust = 1)
+  #   )
+  # 
+  # dat %>%
+  #   group_by(Cluster) %>%
+  #   summarize(
+  #     n = length(p.adjust[p.adjust < 0.05]),
+  #     frac = n / n(),
+  #     
+  #     GeneRatio = mean(GeneRatio),
+  #     meanp     = (metap::meanp(p.adjust))$p,
+  #     fisher    = (metap::sumlog(p.adjust))$p,
+  #     wilk      = (metap::maximump(p.adjust))$p,
+  #     p.adjust  = mean(p.adjust)
+  #   )
+    
+  # Data for significant terms for each cell type
+  # this differs from df_in, since df_in does not contain p-values for each
+  # cell type, just mean p-values summarizing overall significance across
+  # all cell types
+  p_dat <- dat %>%
+    dplyr::filter(p.adjust < pval, qvalue < qval, Count >= n_overlap) %>%
+    mutate(enriched = "Significant")
+  
+  # Create heatmap
+  # ggplot(aes(Cluster, Description, fill = as.character(cluster), alpha = -log10(p.adjust))) +
+  agg_fn <- function(x) {
+    new_agg <- str_replace_all(agg_lab, " ", "~")
+    new_agg <- str_c("bold(", new_agg, ")")
+    
+    x[x == agg_lab] <- parse(text = new_agg)
+    x
+  }
+  
+  if (!include_overall_score) agg_fn <- ggplot2::waiver()
+  
+  res <- dat %>%
+    ggplot(aes(Cluster, Description, fill = as.character(cluster), alpha = enrichment)) +
+    geom_tile() +
+    geom_point(
+      aes(color = enriched, fill = NULL),
+      data   = p_dat,
+      alpha  = 1,
+      shape  = 5,
+      size   = 2,
+      stroke = 0.75
+    ) +
+    scale_alpha_continuous(range = c(0, 1), n.breaks = 6) +
+    scale_color_manual(values = "black") +
+    scale_fill_manual(values = clrs) +
+    scale_y_discrete(labels = agg_fn) +
+    guides(
+      alpha = guide_legend(
+        keyheight      = unit(7, "pt"),
+        label.position = "bottom",
+        order          = 1,
+        title          = "Enrichment Score",
+        title.position = "top",
+        nrow           = 1
+      ),
+      color = guide_legend(
+        title = NULL,
+        label.position = "top",
+        label.theme = element_text(size = 11),
+        override.aes = list(size = 3, stroke = 1)
+      ),
+      fill = "none"
+    ) +
+    djvdj_theme() +
+    theme(
+      legend.position = "bottom",
+      legend.title    = element_text(hjust = 0.5),
+      axis.title      = element_blank(),
+      axis.text.x     = element_text(angle = 45, hjust = 1),
+      strip.clip      = "off"
+    )
+  
+  if (include_overall_score) {
+    res <- res +
+      geom_hline(yintercept = 1.5, size = 1.5, color = "white")
+  }
+  
+  if (free_y) {
+    res <- res +
+      facet_grid(
+        rows = "cluster",
+        scales = "free_y", space = "free_y",
+        labeller = cluster_labels %||% "label_value"
+      )
+  } else {
+    res <- res +
+      facet_wrap(
+        ~ cluster, ncol = n_col, scales = "free_y",
+        labeller = cluster_labels %||% "label_value"
+      ) +
+      theme(aspect.ratio = n_terms / n_distinct(dat$Cluster))
+  }
+  
+  res <- list(
+    heatmap = res,
+    terms = terms
+  )
+  
+  res
+}
+
+#' Create line graphs plotting mean expression of upregulated genes
+#' 
+#' @param exp_data Named list of Seurat objects containing expression data to
+#' plot
+#' @param deg_data Named list of data.frames containing DEGs, this is used to
+#' determine which genes are upregulated for each cell type and timepoint, the
+#' names need to match the names provided for exp_data
+#' @param gns Named vector specifying genes to plot, the names should be the
+#' gene symbol and the values should be the cluster ID. Genes can be colored
+#' based on cluster ID
+#' @param clrs Colors to use for each cluster
+#' @param cell_types The number of top cell types to include, cell types with
+#' the most upregulated genes will be included. Alternatively a vector of cell
+#' types to include can be provided.
+#' @param lvls Levels to use for ordering values in treatment column
+#' @param n_cells Number of cells that must be present for each replicate of
+#' each treatment group for a line to be shown for the timepoint/cell type
+#' @param only_show_upreg Only show cell types with at least one gene
+#' upregulated for any of the timepoints
+create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge),
+                              deg_data =  list("8hpi" = degs$`so_8-up`,
+                                               "24hpi" = degs$`so_merge-up`),
+                              gns,
+                              clrs = c(`1` = "orange"), cell_types = 8,
+                              lvls = c("mock", "8hpi", "24hpi"), n_cells = 10,
+                              type_clmn = "subtype", only_show_upreg = TRUE) {
+  
+  # Genes to plot
+  genes <- names(gns)
+  
+  # Format gene expression input data
+  exp_data <- exp_data %>%
+    imap_dfr(~ {
+      .x %>%
+        FetchData(c(type_clmn, "orig.ident", "treatment", "rep", genes)) %>%
+        as_tibble(rownames = ".cell_id") %>%
+        mutate(tm = .y) %>%
+        pivot_longer(all_of(names(gns)))
+    }) %>%
+                                                     # only use mock data and 8hpi data from 8hpi object
+    filter(treatment != "8hpi" | tm != "24hpi") %>%  # exclude 8hpi CHIKV data from 24hpi objects (e.g. so_merge)
+    filter(tm == "8hpi" | treatment != "mock") %>%   # exclude mock data from 24hpi objects (e.g. so_24)
+                                                     # redefine treatment as mock or tm
+    
+    filter(!(!!sym(type_clmn)) %in% c("other", "unassigned")) %>%  # do not show other and unassigned cells
+    mutate(treatment = ifelse(treatment %in% lvls, treatment, tm))
+    
+  # Only include samples with >10 cells for each replicate
+  exp_data <- exp_data %>%
+    group_by(!!sym(type_clmn), treatment) %>%
+    mutate(reps = list(unique(rep))) %>%
+    group_by(!!sym(type_clmn), treatment, rep) %>%
+    filter(n_distinct(.cell_id) >= n_cells) %>%
+    
+    group_by(!!sym(type_clmn), treatment) %>%
+    filter(all(unique(unlist(reps)) %in% rep)) %>%
+    group_by(!!sym(type_clmn), name) %>%
+    filter(n_distinct(treatment) > 1) %>%
+    ungroup()
+  
+  # Format DEG input data
+  deg_data <- deg_data %>%
+    imap_dfr(~ {
+      .x %>%
+        dplyr::filter(gene %in% genes) %>%
+        dplyr::mutate(treatment = .y) %>%
+        dplyr::select(gene, treatment, !!sym(type_clmn), max_pval)
+    })
+  
+  # Filter for top cell types to plot
+  if (!is.null(cell_types)) {
+    if (is.numeric(cell_types)) {
+      cell_types <- deg_data %>%
+        group_by(!!sym(type_clmn)) %>%
+        summarize(n_genes = n(), .groups = "drop") %>%
+        arrange(desc(n_genes)) %>%
+        head(cell_types) %>%
+        pull(type_clmn)
+    }
+    
+    exp_data <- exp_data %>%
+      dplyr::filter(!!sym(type_clmn) %in% cell_types)
+  }
+  
+  # Format data for plotting points
+  plt_dat <- exp_data %>%
+    group_by(!!sym(type_clmn), treatment, name) %>%
+    summarize(
+      n       = n(),
+      q3      = quantile(value, 0.75),
+      q1      = quantile(value, 0.25),
+      value   = median(value),
+      .groups = "drop"
+      # sd      = sd(value),
+      # err     = qt(0.975, df = n - 1) * (sd / sqrt(n)),  # 95% CI
+    ) %>%
+    mutate(
+      x_end     = match(treatment, lvls),
+      x         = x_end - 1,
+      treatment = fct_relevel(treatment, lvls),
+      cluster   = gns[name],
+      name      = fct_relevel(name, genes)
+    )
+  
+  # Format data for plotting lines
+  # only plot cell types with at least one gene upregulated
+  # plot as segments so linetype can be varied based on significance
+  # need to pull table of DEGs to determine which timepoints/genes are signif
+  # pull median expression to use for the start and end of each segment
+  exp_dat <- plt_dat %>%
+    dplyr::select(name, treatment, !!sym(type_clmn), value)
+  
+  ln_dat <- plt_dat %>%
+    left_join(deg_data, by = c(name = "gene", "treatment", type_clmn)) %>%
+    
+    dplyr::filter(x > 0) %>%  # remove rows that start at 0 (occurs for mock)
+    
+    # need to set columns with treatment labels for segment start/end so
+    # correct expression values can be pulled
+    mutate(trt_end = lvls[x_end], trt_start = lvls[x]) %>%
+    
+    dplyr::select(
+      name, treatment, !!sym(type_clmn), cluster,
+      x, x_end, trt_start, trt_end,
+      max_pval
+    ) %>%
+    
+    left_join(exp_dat, by = c("name", trt_start = "treatment", type_clmn)) %>%
+    dplyr::rename(y = value) %>%
+    
+    left_join(exp_dat, by = c("name", trt_end = "treatment", type_clmn)) %>%
+    dplyr::rename(y_end = value) %>%
+    
+    mutate(
+      Upregulated = as.character(!is.na(max_pval)),
+      Upregulated = fct_relevel(Upregulated, c("TRUE", "FALSE")),
+      name        = fct_relevel(name, genes)
+    )
+  
+  # Only show cell types with at least one gene upregulated for any timepoint
+  if (only_show_upreg) {
+    ln_dat <- ln_dat %>%
+      group_by(!!sym(type_clmn)) %>%
+      filter(any(Upregulated == "TRUE")) %>%
+      ungroup()
+  }
+  
+  # Create plots
+  aspect <- length(genes) / n_distinct(plt_dat$name) * 0.9
+  
+  res <- plt_dat %>%
+    filter(!!sym(type_clmn) %in% unique(pull(ln_dat, type_clmn))) %>%
+    ggplot(aes(treatment, value, color = cluster)) +
+    
+    geom_errorbar(
+      aes(x = treatment, ymin = q1, ymax = q3),
+      color = "grey90",
+      width = 0,
+      linewidth = 1.5
+    ) +
+    geom_point(size = 1.5) +
+    geom_segment(
+      aes(
+        x = x, xend = x_end, y = y, yend = y_end,
+        linetype = Upregulated
+      ),
+      linewidth = 0.75,
+      data  = ln_dat
+    ) +
+    facet_grid(as.formula(str_c("name ~ ", typ_clmn)), switch = "y", scales = "free_y") +
+    
+    scale_linetype_manual(values = c("TRUE" = 1, "FALSE" = 3)) +
+    scale_color_manual(values = clrs) +
+    scale_y_continuous(
+      breaks = (function(x) return(c(0, floor(max(x))))),
+      expand = expansion(c(0.2, 0.05))
+    ) +
+    scale_x_discrete(labels = c(mock = "m", `8hpi` = "8h", `24hpi` = "24h")) +
+    guides(
+      color = "none",
+      linetype = guide_legend(title.position = "top", title.hjust = 0.5)
+    ) +
+    
+    djvdj_theme() +
+    theme(
+      aspect.ratio    = aspect,
+      legend.position = "bottom",
+      legend.title    = element_text(hjust = 0.5),
+      strip.clip      = "off",
+      strip.placement = "outside",
+      axis.title      = element_blank()
+    )
+  
+  res
+}
 ```
 
-```{r "params"}
-# Should objects be created
-# objects to check for
-load_objs <- c(
-  "so",
-  "so_lec",
-  "so_fib",
-  "so_enr"
-)
-
-files_in <- load_objs %>%
-  str_c(".rds") %>%
-  here(so_dir, .)
-
-create_so <- files_in %>%
-  map_lgl(~ !file.exists(here(.x))) %>%
-  any()
-
-# Clustering parameters
-# rslns <- c(3, 5, 7)
-rslns <- c(3.4, 4.2, 5)
-
-type_clsts <- set_clst_names(rslns)
-
-type_clst_clmn <- type_clsts %>%
-  pluck(as.character(params$type_res), "clst")
-
-lec_rslns <- 1:10
-
-lec_clsts <- lec_rslns %>%
-  set_clst_names("lec_")
-
-lec_clst_clmn <- lec_clsts %>%
-  pluck(as.character(params$lec_res), "clst")
-
-fib_clsts <- rslns %>%
-  set_clst_names("fib_")
-
-fib_clst_clmn <- fib_clsts %>%
-  pluck(as.character(params$fib_res), "clst")
-
-# Cell types to use for identifying subsets
-lec_cell_types <- "Endothelial cells"
-fib_cell_types <- c("Fibroblasts", "Stromal cells (DN)")
-
-# CHIKV group labels
-chikv_grps <- c("CHIKV-low", "CHIKV-high")
+```{r "check for objects", echo = FALSE}
+create_obj <- !file.exists(here(params$so_dir, "so_merge.qs"))
 ```
 
 ```{r "references"}
@@ -125,9 +1279,7 @@ colnames(ref_lec) <- colnames(ref_lec) %>%
 
 ref_LEC_xiang <- ref_LEC_xiang[rownames(ref_lec), ]
 
-if (!identical(rownames(ref_LEC_xiang), rownames(ref_lec))) {
-  stop("LEC reference rownames do not match.")
-}
+stopifnot(identical(rownames(ref_LEC_xiang), rownames(ref_lec)))
 
 ref_lec <- cbind(ref_LEC_xiang, ref_lec)
 ref_lec <- ref_lec[, !grepl("^Endothelial cells", colnames(ref_lec))]
@@ -138,1025 +1290,672 @@ ref_fib <- ref_fib[rownames(ref_fib) %in% rownames(ref_lymphnodestromal), ]
 
 ref_lymphnodestromal <- ref_lymphnodestromal[rownames(ref_fib), ]
 
-if (!identical(rownames(ref_lymphnodestromal), rownames(ref_fib))) {
-  stop("Fibroblast/stromal reference rownames do not match.")
-}
+stopifnot(identical(rownames(ref_lymphnodestromal), rownames(ref_fib)))
 
 ref_fib <- cbind(ref_lymphnodestromal, ref_fib)
 ```
 
-```{r "24 OBJECTS", include = FALSE, eval = create_so}
+```{r "integrate samples", eval = create_obj}
+# Adjust 8 and 24 hpi objects
+so_8  <- read_rds(file.path(params$orig_so_dir, "2021-07-16/sobjs/so.rds"))
+so_24 <- read_rds(file.path(params$orig_so_dir, "2021-01-08/sobjs/so.rds"))
 
-# Create Seurat object
-# We expect cells where the virus is replicating could have a high fraction of
-# mitochondrial reads
-sobjs <- samples$`24hpi` %>%
-  imap(~ create_virus_obj(
-    mat_dir     = .x,
-    proj_name   = .y,
-    gene_min    = 250,
-    gene_max    = 7500,
-    mito_max    = 20,
-    virus_str   = "^CHIKV",
-    virus_assay = "CHIKV"
-  ))
+so_8 <- so_8 %>%
+  mutate_meta(
+    mutate,
+    orig.ident = str_c(treatment, "-", rep),
+    chikv_grp = ifelse(tot_nCount_CHIKV > 0, chikv_grps[2], chikv_grps[1])
+  )
 
-# Estimate doublets
-sobjs <- sobjs %>%
-  map(~ {
+so_8  <- RenameCells(so_8, add.cell.id = "8hpi")
+so_24 <- RenameCells(so_24, add.cell.id = "24hpi")
+
+# Merge 8 and 24 hpi objects
+so_merge <- merge(so_8, so_24) %>%
+  FindVariableFeatures(nfeatures = 2000) %>%
+  ScaleData() %>%
+  RunPCA() %>%
+  RunUMAP(dims = 1:40)
+  
+# Integrate samples
+so_merge <- so_merge %>%
+  mutate_meta(
+    mutate,
+    integration_var = ifelse(
+      tm == "24hpi" & treatment == "CHIKV",
+      "chikv_24hpi", "other"
+    )
+  ) %>%
+  RunHarmony(
+    c("rep", "integration_var"),
+    dims = 1:40, plot_convergence = TRUE
+  ) %>%
+  RunUMAP(
+    dims = 1:40,
+    reduction      = "harmony",
+    reduction.name = "humap",
+    reduction.key  = "hUMAP_"
+  ) %>%
+  FindNeighbors(reduction = "harmony", dims = 1:40) %>%
+  FindClusters(resolution = 5:10)
+```
+
+```{r "broad cell types", eval = create_obj}
+# Classify broad cell types
+type_clst <- str_c("RNA_snn_res.", params$type_res)
+
+so_merge <- so_merge %>%
+  mutate_meta(
+    dplyr::select,
+    -any_of(c("UMAP_1", "UMAP_2", "rough_type", "rough_r", "b_score", "t_score"))
+  ) %>%
+  clustify(
+    ref_mat     = ref_immgen,
+    cluster_col = type_clst,
+    threshold   = 0.6,
+    n_genes     = 2000,
+    rename_prefix = "rough"
+  )
+
+# Annotate B and T cells
+# These cells are often mis-classified
+so_merge <- so_merge %>%
+  classify_markers(
+    feats    = "Cd19",
+    filt     = Cd19 > 0.4,
+    type     = "B cells",
+    clst_col = type_clst,
+    type_col = "rough_type"
+  ) %>%
+  classify_markers(
+    feats    = "Cd3e",
+    filt     = Cd3e > 0.4,
+    type     = "T cells",
+    clst_col = type_clst,
+    type_col = "rough_type"
+  )
+
+# Annotate erythrocytes based on Hba expression
+so_merge <- so_merge %>%
+  classify_markers(
+    feats    = "Hba-a1",
+    filt     = `Hba-a1` > 2,
+    type     = "Erythrocytes",
+    clst_col = type_clst,
+    type_col = "rough_type"
+  )
+
+# Annotate potential FDCs based on Pdpn, Pecam1, and Cr2 expression
+# These cells are often unassigned by clustifyr
+so_merge <- so_merge %>%
+  classify_markers(
+    feats    = c("Pdpn", "Pecam1", "Cr2"),
+    filt     = Pdpn > 0.3 & Pecam1 < 0.3 & Cr2 > 1,
+    type     = "Fibroblasts",
+    clst_col = type_clst,
+    type_col = "rough_type"
+  ) %>%
+  mutate_meta(mutate, cell_type = str_remove(rough_type, " \\(.+$"))
+```
+
+```{r "fibroblast subsets", eval = create_obj}
+# Recluster fibroblasts and annotate PvCs
+fib_cell_types <- c("Fibroblasts", "Stromal cells", "Stromal cells (DN)")
+
+so_frc <- so_merge %>%
+  subset(cell_type %in% fib_cell_types) %>%
+  FindVariableFeatures(nfeatures = 2000) %>%
+  ScaleData() %>%
+  RunPCA()
+  
+so_frc <- so_frc %>%
+  mutate_meta(
+    mutate,
+    integration_var = ifelse(
+      tm == "24hpi" & treatment == "CHIKV",
+      "chikv_24hpi", "other"
+    )
+  ) %>%
+  RunHarmony(
+    c("rep", "integration_var"),
+    dims = 1:40, plot_convergence = TRUE
+  ) %>%
+  RunUMAP(
+    dims = 1:40,
+    reduction      = "harmony",
+    reduction.name = "humap",
+    reduction.key  = "hUMAP_"
+  ) %>%
+  FindNeighbors(reduction = "harmony", dims = 1:40) %>%
+  FindClusters(resolution = 1:5)
+
+# Set PvCs
+# Integration is not great for Cxcl9+ TRCs
+# Works good for PvCs
+frc_clst <- str_c("RNA_snn_res.", params$frc_res)
+
+so_frc <- so_frc %>%
+  mutate_meta(
+    dplyr::select,
+    -any_of(c("UMAP_1", "UMAP_2", "frc_type", "frc_subtype", "frc_r"))
+  ) %>%
+  clustify(
+    ref_mat       = ref_fib,
+    cluster_col   = frc_clst,
+    rename_prefix = "frc",
+    n_genes       = 2000,
+    threshold     = 0.65
+  ) %>%
+  mutate_meta(~ {
     .x %>%
-      run_doubletFinder(
-        # dbl_rate = 0.1,
-        rsln = 5
-      ) %>%
-      mutate_meta(
-        mutate,
-        qc_class = if_else(
-          dbl_class == "Doublet",
-          "doublet",
-          qc_class
-        )
-      ) %>%
-      mutate_meta(
-        select,
-        -starts_with("DF.classifications_"),
-        -starts_with("pANN_")
-      )
+      mutate(cell_type = ifelse(frc_type == "PvC", frc_type, "FRC")) %>%
+      dplyr::rename(frc_subtype = frc_type)
   })
 
-# Identify CHIKV low/high cells
-sobjs <- sobjs %>%
-  map(~ {
-    res <- .x %>%
-      mutate_meta(mutate, chikv_grp = chikv_grps[1])
+# Add FRC subset to object
+so_merge <- so_merge %>%
+  AddMetaData(FetchData(so_frc, "frc_subtype")) %>%
+  mutate_meta(
+    mutate,
+    cell_type = case_when(
+      frc_subtype == "PvC" & !is.na(frc_subtype) ~ frc_subtype,
+      !is.na(frc_subtype)                        ~ "FRC",
+      TRUE                                       ~ cell_type
+    ),
+    frc_type    = ifelse(is.na(frc_subtype), cell_type, frc_subtype),
+    frc_subtype = replace_na(frc_subtype, "other")
+  )
+```
+
+```{r "lec subsets", eval = create_obj}
+# Create LEC objects
+# * use original broad cell types based on clustering resolution 5
+# * merge 8hpi and 24hpi LECs and BECs, re-cluster
+# * integrate replicates and integrate 24hpi CHIKV sample with all other samples
+# * key issue with past attempts to perform integrated analysis is that
+#   integration does not work well when BECs are excluded
+lec_cell_types <- "Endothelial cells"
+
+so_lec <- so_merge %>%
+  subset(cell_type %in% lec_cell_types) %>%
+  FindVariableFeatures(nfeatures = 2000) %>%
+  ScaleData() %>%
+  RunPCA()
+
+so_lec <- so_lec %>%
+  mutate_meta(
+    mutate,
+    integration_var = ifelse(
+      tm == "24hpi" & treatment == "CHIKV",
+      "chikv_24hpi",
+      "other"
+    )
+  ) %>%
+  RunHarmony(
+    c("rep", "integration_var"),
+    dims = 1:40, plot_convergence = TRUE
+  ) %>%
+  RunUMAP(reduction = "harmony", dims = 1:40)
+
+# Parameters to test
+# get LEC annotations using 100 different settings
+# vary clustering resolution and number of genes used for calculating
+# correlations
+resolutions <- seq(3, 15, 0.5)
+n_genes     <- seq(500, 2000, 500)
+obj         <- "all"
+met         <- "spearman"
+bulk        <- "mean"
+clst_params <- as.list(expand_grid(resolutions, n_genes, obj, met, bulk))
+
+so_lec <- so_lec %>%
+  FindNeighbors(reduction = "harmony", dims = 1:40) %>%
+  FindClusters(resolution = resolutions)
+
+# Annotate LEC subsets for each set of parameters
+# return data.frame with summary stats for each
+cluster_param_results <- clst_params %>%
+  pmap_dfr(~ {
+    args  <- list(...)
+    rsln  <- args$resolutions
+    n_gns <- args$n_genes
     
-    if (any(.x$nCount_CHIKV > params$chikv_lim)) {
-      chikv_res <- res %>%
-        subset(nCount_CHIKV > params$chikv_lim) %>%
-        mutate_meta(mutate, nCount_CHIKV_log = log10(nCount_CHIKV + 1)) %>%
-        
-        cluster_signal(
-          data_column  = "nCount_CHIKV_log",
-          clust_column = "chikv_grp",
-          clust_names  = chikv_grps,
-          method       = "km",
-          return_sobj  = FALSE
-        ) %>%
-        select(-nCount_CHIKV_log)
-      
-      res <- res %>%
-        AddMetaData(metadata = chikv_res) %>%
-        mutate_meta(
-          mutate,
-          chikv_grp = replace_na(chikv_grp, chikv_grps[1])
-        )
-    }
+    # Annotate cell types
+    clmn <- str_c("RNA_snn_res.", rsln)
+    
+    if (args$obj == "mock") obj <- subset(so_lec, treatment == "mock")
+    else                    obj <- so_lec
+    
+    typs <- obj %>%
+      clustify(
+        ref_mat     = ref_lec,
+        cluster_col = clmn,
+        n_genes     = n_gns,
+        threshold   = 0.55,
+        # threshold   = 0.6,
+        compute_method    = args$met,
+        pseudobulk_method = args$bulk
+      )
+    
+    typs <- typs@meta.data %>%
+      distinct(!!sym(clmn), type)
+    
+    typs <- set_names(typs$type, as.character(pull(typs, clmn)))
+    
+    so_lec <- so_lec %>%
+      mutate_meta(mutate, type = typs[as.character(!!sym(clmn))])
+    
+    # Calculate stats
+    res <- so_lec %>%
+      FetchData(c("type", "tm", "treatment", "chikv_grp", "Marco", "Madcam1", clmn)) %>%
+      as_tibble(rownames = ".cell_id")
+    
+    frac_few <- table(res[[clmn]])
+    frac_few <- frac_few[frac_few < 100]
+    n_few    <- sum(frac_few)
+    frac_few <- n_few / nrow(res)
+    
+    typ <- res %>%
+      group_by(tm, treatment, type) %>%
+      summarize(n_type = n(), .groups = "drop") %>%
+      group_by(tm, treatment) %>%
+      mutate(frac_type = n_type / sum(n_type)) %>%
+      ungroup()
+    
+    chikv <- res %>%
+      filter(tm == "24hpi", treatment == "CHIKV", chikv_grp == "CHIKV-high") %>%
+      group_by(type) %>%
+      summarize(n_chikv = n(), .groups = "drop") %>%
+      mutate(frac_chikv = n_chikv / sum(n_chikv)) %>%
+      ungroup()
+    
+    marks <- res %>%
+      group_by(tm, treatment, type) %>%
+      summarize(
+        Marco_mn    = mean(Marco),
+        Marco_med   = median(Marco),
+        Madcam1_mn  = mean(Madcam1),
+        Madcam1_med = median(Madcam1),
+        .groups = "drop"
+      ) %>%
+      group_by(tm, treatment) %>%
+      summarize(
+        Marco_mn    = type[Marco_mn == max(Marco_mn)],
+        Marco_med   = type[Marco_med == max(Marco_med)],
+        Madcam1_mn  = type[Madcam1_mn == max(Madcam1_mn)],
+        Madcam1_med = type[Madcam1_med == max(Madcam1_med)],
+        .groups = "drop"
+      )
+    
+    typ_diff <- so_lec@meta.data %>%
+      group_by(tm, treatment, lec_type) %>%
+      summarize(n_old_type = n(), .groups = "drop")
+
+    res <- typ %>%
+      full_join(chikv, by = "type") %>%
+      full_join(marks, by = c("tm", "treatment")) %>%
+      full_join(typ_diff, by = c("tm", "treatment", c(type = "lec_type"))) %>%
+      mutate(
+        rsln     = clmn,
+        n_genes  = args$n_genes,
+        obj      = args$obj,
+        type_key = list(typs),
+        n_small_clusters    = n_few,
+        frac_small_clusters = frac_few
+      ) %>%
+      rowwise() %>%
+      mutate(
+        frac_old_diff = abs(diff(c(n_type, n_old_type))) / n_old_type
+      ) %>%
+      ungroup()
     
     res
   })
 
-# Calculate CHIKV stats
-# Ignore low_gene_count and high_mito_reads for CHIKV-high cells
-chikv_qc_stats <- c("low_gene_count", "high_mito_reads")
-
-sobjs <- sobjs %>%
-  map(~ {
-    .x %>%
-      mutate_meta(
-        mutate,
-        pct_CHIKV = nCount_CHIKV / (nCount_RNA + nCount_CHIKV),
-        
-        CHIKV_sgRNA_fc = (CHIKV_AF15561_sgRNA + 1) / (CHIKV_AF15561_5 + 1),
-        
-        qc_class = if_else(
-          qc_class %in% chikv_qc_stats & chikv_grp == chikv_grps[2],
-          "pass",
-          qc_class
-        )
-      )
-  })
-
-# Format sample/replicate names
-sobjs <- sobjs %>%
-  map(~ {
-    .x %>%
-      mutate_meta(
-        mutate,
-        treatment  = str_extract(orig.ident, "^[A-Z]+"),
-        rep        = str_extract(orig.ident, "[0-9]+$"),
-        treatment  = as.character(params$treatments[treatment]),
-        orig.ident = str_c(treatment, "-", rep)
-      )
-  })
-
-# Filter, normalize, and merge objects
-so <- sobjs %>%
-  map(~ {
-    .x %>%
-      subset(subset = qc_class == "pass") %>%
-      norm_sobj(
-        cc_scoring = FALSE,
-        rna_method = "LogNormalize",
-        scale_data = FALSE
-      )
-  })
-
-so <- merge(so[[1]], so[-1])
-
-# Cluster cells
-so <- so %>%
-  FindVariableFeatures(
-    assay            = "RNA",
-    selection.method = "vst",
-    nfeatures        = 2000
-  ) %>%
-  ScaleData(assay = "RNA") %>%
-  cluster_RNA(
-    resolution = c(3.4, 4.2, 5),
-    dims       = 1:40
-  )
-
-# Save unfiltered objects and meta.data
-# Save and delete raw objects asap to free up memory
-# so_raw <- merge(sobjs[[1]], sobjs[2:length(sobjs)])
+# # TESTING SEURAT INTEGRATION
+# so_lec <- so_lec %>%
+#   map(~ {
+#     .x %>%
+#       SplitObject("treatment") %>%
+#       map(~ {
+#         .x %>%
+#           NormalizeData() %>%
+#           FindVariableFeatures(nfeatures = 2000)
+#       })
+#   }) %>%
+#   flatten()
 # 
-# so_raw_df <- so_raw@meta.data %>%
-#   as_tibble(rownames = "cell_id")
+# int_features <- so_lec %>%
+#   SelectIntegrationFeatures()
 # 
-# write_rds(so_raw,    here(so_dir, "so_raw.rds"))
-# write_tsv(so_raw_df, here(so_dir, "so_raw.tsv.gz"))
+# int_anchors <- so_lec %>%
+#   FindIntegrationAnchors(anchor.features = int_features)
 # 
-# rm(sobjs, so_raw)
-
+# so_int <- IntegrateData(anchorset = int_anchors)
+# 
+# DefaultAssay(so_int) <- "integrated"
+# 
+# so_int <- so_int %>%
+#   ScaleData() %>%
+#   RunPCA() %>%
+#   RunUMAP(reduction = "pca", dims = 1:40)
+# 
+# so_int %>%
+#   plot_scatter("lec_type", size = 0.5) +
+#   facet_grid(tm ~ treatment)
 ```
 
-```{r "24 TYPES", eval = create_so}
+```{r "lec consensus annotations", eval = create_obj}
+# Determine consensus annotations
+# determine which cell type annotations are most consistent for each cell
+ann_key <- cluster_param_results %>%
+  distinct(type_key, rsln, n_genes, obj) %>%
+  mutate(id = row_number())
 
-# B and T cell markers
-b_genes   <- list("B cells" = "Cd19")
-t_genes   <- list("T cells" = "Cd3e")
-
-# Classify broad cell types
-# Manually classified B cells and T cells
-type_clsts %>%
-  iwalk(~ {
-    so <<- so %>%
-      mutate_meta(select, -UMAP_1, -UMAP_2) %>%
-      clustify(
-        ref_mat       = ref_immgen,
-        cluster_col   = .x$clst,
-        rename_prefix = .x$type
-      ) %>%
-      classify_mod_score(            # B cells
-        feats    = b_genes,
-        prefix   = str_c("b_", .y),
-        cutoff   = 0.2,
-        clst_col = .x$clst,
-        type_col = str_c(.x$type, "_type")
-      ) %>%
-      classify_mod_score(            # T cells
-        feats    = t_genes,
-        prefix   = str_c("t_", .y),
-        cutoff   = 0.5,
-        clst_col = .x$clst,
-        type_col = str_c(.x$type, "_type")
-      )
-  })
-
-# Set broad cell types
-type_clmn <- as.character(params$type_res)
-type_clmn <- type_clsts[[type_clmn]]$type
-type_clmn <- str_c(type_clmn, "_type")
-
-so <- so %>%
-  mutate_meta(
-    mutate,
-    cell_type = str_remove(!!sym(type_clmn), " \\(.+$"),
-    
-    cell_type_clst = if_else(
-      cell_type == "unassigned",
-      str_c(cell_type, "-", !!sym(type_clst_clmn)),
-      cell_type
-    )
+ann_df <- so_lec@meta.data %>%
+  as_tibble(rownames = ".cell_id") %>%
+  dplyr::select(
+    .cell_id,
+    starts_with("RNA_snn_res."), "tm", "orig.ident", "treatment", "lec_type"
   )
 
-# TO REMOVE CELL TYPE COLUMNS
-# so <- so %>%
-#   mutate_meta(
-#     select,
-#     -starts_with("b_"),
-#     -starts_with("mac_"),
-#     -starts_with("t_")
-#   )
-# so <- so %>%
-#   mutate_meta(
-#     select,
-#     -starts_with("res_"),
-#     -ends_with("_score"),
-#     -c(cell_type, cell_type_clst)
-#   )
-
-```
-
-```{r "24 LECs", eval = create_so}
-
-# Classify LEC cell types
-# ref_lec is Xiang et al. reference with BECs added
-so_lec <- so %>%
-  subset_sobj(
-    subset = cell_type %in% lec_cell_types,
-    rsln   = lec_rslns,
-    dims   = 1:40
-  )
-
-lec_clsts %>%
-  iwalk(~ {
-    so_lec <<- so_lec %>%
-      mutate_meta(select, -UMAP_1, -UMAP_2) %>%
-      clustify(
-        ref_mat       = ref_lec,
-        cluster_col   = .x$clst,
-        rename_prefix = .x$type
-        # threshold     = 0.5
-      )
-  })
-
-# Set LEC cell types
-lec_clmn <- as.character(params$lec_res)
-lec_clmn <- lec_clsts[[lec_clmn]]$type
-lec_clmn <- str_c(lec_clmn, "_type")
-
-so_lec <- so_lec %>%
-  mutate_meta(
-    mutate,
-    lec_type = !!sym(lec_clmn),
-    
-    lec_type_clst = if_else(
-      lec_type == "unassigned",
-      str_c(lec_type, "-", !!sym(lec_clst_clmn)),
-      lec_type
-    )
-  )
-
-# Add LEC subtypes back to original object
-so <- so %>%
-  AddMetaData(
-    metadata = so_lec$lec_type,
-    col.name = "lec_type"
-  ) %>%
-  mutate_meta(
-    mutate,
-    lec_subtype = replace_na(lec_type, "other"),
-    lec_type    = if_else(lec_subtype == "other", cell_type, lec_type),
-    subtype     = lec_type
-  )
-
-```
-
-```{r "24 FIBROBLASTS", eval = create_so}
-
-# Classify non-endothelial stromal cell types
-# ref_fib is ref_lymphnodestromal with immgen fibroblast references added
-so_fib <- so %>%
-  subset_sobj(
-    subset       = cell_type %in% fib_cell_types,
-    rsln         = rslns,
-    dims         = 1:40,
-    cluster_data = TRUE
-  )
-
-fib_clsts %>%
-  iwalk(~ {
-    so_fib <<- so_fib %>%
-      mutate_meta(select, -UMAP_1, -UMAP_2) %>%
-      clustify(
-        ref_mat       = ref_fib,
-        cluster_col   = .x$clst,
-        rename_prefix = .x$type,
-        threshold     = 0.65
-      )
-  })
-
-# Set fibroblast/stromal cell types
-fib_clmn <- as.character(params$fib_res)
-fib_clmn <- fib_clsts[[fib_clmn]]$type
-fib_clmn <- str_c(fib_clmn, "_type")
-
-so_fib <- so_fib %>%
-  mutate_meta(
-    mutate,
-    fib_type = !!sym(fib_clmn),
-    
-    fib_type_clst = if_else(
-      fib_type == "unassigned",
-      str_c(fib_type, "-", !!sym(fib_clst_clmn)),
-      fib_type
-    )
-  )
-
-# Add fibroblast/stromal subtypes back to original object
-so <- so %>%
-  AddMetaData(
-    metadata = so_fib$fib_type,
-    col.name = "fib_type"
-  ) %>%
-  mutate_meta(
-    mutate,
-    fib_subtype = replace_na(fib_type, "other"),
-    fib_type    = if_else(fib_subtype == "other", cell_type, fib_type),
-    subtype     = if_else(fib_subtype == "other", subtype, fib_type)
-  )
-
-```
-
-```{r "create objects", include = FALSE, eval = create_so}
-# Create Seurat object
-sobjs <- samples %>%
-  map(~ imap(.x, ~ create_virus_obj(
-    mat_dir     = .x,
-    proj_name   = .y,
-    gene_min    = params$gene_min,
-    gene_max    = params$gene_max,
-    mito_max    = params$mito_max,
-    virus_str   = "^CHIKV",
-    virus_assay = "CHIKV"
-  )))
-
-# Estimate cell doublets
-# run this separately for each capture since each has a different number of
-# cells and thus a different doublet rate
-sobjs <- sobjs %>%
-  map(~ map(.x, run_doubletFinder, rsln = 2))
-
-# Format sample/replicate names
-sobjs <- sobjs %>%
-  imap(~ {
-    tm <- .y
-    
-    map(.x, ~ {
-      .x %>%
-        mutate_meta(
-          mutate,
-          treatment = str_extract(orig.ident, "^[A-Z]+"),
-          treatment = as.character(params$treatments[treatment]),
-          rep       = str_extract(orig.ident, "[0-9]+$"),
-          tm        = tm,
-          sample    = str_c(treatment, tm, rep, sep = "-")
-        )
-    })
-  })
-
-# Adjust qc_class
-# Cell calls from cellranger do not look as accurate for 8hpi AF2
-# remove cells with <= 800 UMIs
-sobjs <- sobjs %>%
-  map(~ map(
-    .x,
-    mutate_meta,
-    mutate,
-    qc_class = case_when(
-      dbl_class == "Doublet" ~ "doublet",
-      tm == "8hpi" & orig.ident == "AF2" & nCount_RNA <= 800 ~ "low_counts",
-      TRUE ~ qc_class
-    )
-  ))
-```
-
-```{r "identify CHIKV-high cells", eval = create_so}
-# Identify CHIKV-high cells
-clst_params <- list(
-  objs      = sobjs,
-  count_lim = c(5, 0),
-  method    = list("km", NULL)
-)
-
-sobjs <- clst_params %>%
-  pmap(~ {
+ann_key %>%
+  pwalk(~ {
     args <- list(...)
     
-    args$objs %>%
-      map(
-        classify_chikv,
-        count_clmn = "nCount_CHIKV",
-        count_lim  = args$count_lim,
-        method     = args$method
-      )
-  })
-
-# Calculate CHIKV stats
-# Ignore low_gene_count and high_mito_reads for CHIKV-high cells
-chikv_qc_stats <- c("low_gene_count", "high_mito_reads")
-
-sobjs <- sobjs %>%
-  map(~ imap(.x, ~ {
-    .x %>%
-      mutate_meta(
-        mutate,
-        pct_CHIKV = nCount_CHIKV / (nCount_RNA + nCount_CHIKV),
-        sgRNA_fc  = (CHIKV_AF15561_sgRNA + 1) / (CHIKV_AF15561_5 + 1),
-        neg_fc    = (CHIKV_AF15561_neg + 1) / (CHIKV_AF15561_5 + 1),
-        
-        qc_class = if_else(
-          qc_class %in% chikv_qc_stats & chikv_grp == chikv_grps[2],
-          "pass",
-          qc_class
-        )
-      )
-  }))
-```
-
-```{r "merge objects", eval = create_so}
-# Normalize objects
-sobjs <- sobjs %>%
-  map(~ map(.x, ~ {
-    .x %>%
-      norm_sobj(
-        cc_scoring = TRUE,
-        rna_method = "LogNormalize",
-        scale_data = FALSE
-      )
-  }))
-
-# Save unfiltered objects
-sobjs %>%
-  qsave(file.path(so_dir, "sobjs_raw.qs"))
-
-# Filter and merge objects
-# merge each timepoint separately
-sobjs <- sobjs %>%
-  map(~ map(.x, subset, qc_class == "pass"))
-
-sobjs <- sobjs %>%
-  map(~ merge(.x[[1]], .x[-1]))
-
-sobjs <- sobjs %>%
-  map(~ {
-    .x %>%
-      run_m3drop(threshold = 0.001) %>%
-      ScaleData(
-        assay           = "RNA",
-        vars.to.regress = "nCount_RNA"
-      ) %>%
-      cluster_RNA(
-        resolution = c(1, 3, 5, 7),
-        dims       = 1:40
-      )
-  })
-
-# Merge timepoints together
-# delete raw objects asap to free up memory
-so <- merge(sobjs[[1]], sobjs[-1])
-
-sobjs %>%
-  qsave(file.path(so_dir, "sobjs.qs"))
-
-rm(sobjs)
-```
-
-```{r "clustify types", eval = create_so}
-# Cluster cells
-so <- so %>%
-  run_m3drop(threshold = 0.001) %>%
-  ScaleData(
-    assay           = "RNA",
-    vars.to.regress = "nCount_RNA"
-  ) %>%
-  cluster_RNA(
-    resolution = rslns,
-    dims       = 1:40
-  )
-
-# B and T cell markers
-b_genes <- list("B cells" = "Cd19")
-t_genes <- list("T cells" = "Cd3e")
-
-# Classify broad cell types
-# Manually classified B cells and T cells
-threshold <- 0.5
-
-type_clsts %>%
-  iwalk(~ {
-    so <<- so %>%
-      mutate_meta(select, -UMAP_1, -UMAP_2) %>%
-      clustify(
-        ref_mat       = ref_immgen,
-        cluster_col   = .x$clst,
-        threshold     = threshold,
-        rename_prefix = .x$type
-      ) %>%
-      classify_mod_score(            # B cells
-        feats    = b_genes,
-        prefix   = str_c("b_", .y),
-        cutoff   = 0.2,
-        clst_col = .x$clst,
-        type_col = str_c(.x$type, "_type")
-      ) %>%
-      classify_mod_score(            # T cells
-        feats    = t_genes,
-        prefix   = str_c("t_", .y),
-        cutoff   = 0.5,
-        clst_col = .x$clst,
-        type_col = str_c(.x$type, "_type")
-      )
-  })
-
-# Set broad cell types
-type_clmn <- as.character(params$type_res)
-type_clmn <- type_clsts[[type_clmn]]$type
-type_clmn <- str_c(type_clmn, "_type")
-
-so <- so %>%
-  mutate_meta(
-    mutate,
-    cell_type = str_remove(!!sym(type_clmn), " \\(.+$"),
-    cell_type = recode(cell_type, "Stromal cells" = str_c(cell_type, " (DN)")),
+    new_clmn <- str_c("type-", args$rsln, "-", args$n_genes)
     
-    cell_type_clst = if_else(
-      cell_type == "unassigned",
-      str_c(cell_type, "-", !!sym(type_clst_clmn)),
-      cell_type
-    )
-  )
-```
+    ann_df <<- ann_df %>%
+      mutate(!!sym(new_clmn) := args$type_key[as.character(!!sym(args$rsln))])
+  })
 
-```{r "clustify LECs", eval = create_so}
-# Classify LEC cell types
-# ref_lec is Xiang et al. reference with BECs added
-# so_lec <- so %>%
-#   subset_sobj(
-#     subset       = cell_type %in% lec_cell_types,
-#     rsln         = rslns,
-#     dims         = 1:40,
-#     var_p        = 0.001
-#     # regress_vars = "nCount_RNA"
-#   )
+ann_stats <- ann_df %>%
+  dplyr::select(.cell_id, starts_with("type-")) %>%
+  pivot_longer(starts_with("type-")) %>%
+  
+  group_by(.cell_id) %>%
+  summarize(
+    count = list(table(value)),
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  rowwise() %>%
+  mutate(
+    top_ann  = names(head(sort(count, decreasing = TRUE), 1)),
+    sec_ann  = names(tail(head(sort(count, decreasing = TRUE), 2), 1)),
+    top_n    = max(count),
+    top_frac = top_n / n,
+    ann_n    = length(count)
+  ) %>%
+  ungroup()
 
-so_lec <- so %>%
-  subset(cell_type %in% lec_cell_types) %>%
-  FindVariableFeatures(selection.method = "vst", nfeature = 2000) %>%
-  ScaleData(vars.to.regress = "nCount_RNA") %>%
-  cluster_RNA(
-    resolution = lec_rslns,
-    dims       = 1:40
-  )
+top_typs <- set_names(ann_stats$top_ann, ann_stats$.cell_id)
+sec_typs <- set_names(ann_stats$sec_ann, ann_stats$.cell_id)
+top_frac <- set_names(ann_stats$top_frac, ann_stats$.cell_id)
 
 so_lec <- so_lec %>%
-  mutate_meta(select, -starts_with("lec_"))
+  AddMetaData(top_typs, col.name = "top_type") %>%
+  AddMetaData(sec_typs, col.name = "sec_type") %>%
+  AddMetaData(top_frac, col.name = "top_frac")
 
-lec_clsts %>%
-  iwalk(~ {
-    so_lec <<- so_lec %>%
-      mutate_meta(select, -UMAP_1, -UMAP_2) %>%
-      clustify(
-        ref_mat       = ref_lec,
-        cluster_col   = .x$clst,
-        rename_prefix = .x$type,
-        threshold     = 0.45,
-        n_genes       = 0
-      )
-  })
+# Cluster cell type annotations
+# want to identify primary annotation schemes
+ann_mat <- ann_df %>%
+  dplyr::select(.cell_id, starts_with("type-"))
 
-# Set LEC cell types
-lec_clmn <- as.character(params$lec_res)
-lec_clmn <- lec_clsts[[lec_clmn]]$type
-lec_clmn <- str_c(lec_clmn, "_type")
+ann_typs <- ann_mat %>%
+  dplyr::select(starts_with("type-")) %>%
+  as.matrix() %>%
+  as.factor() %>%
+  levels()
+
+ann_mat <- ann_mat %>%
+  mutate(across(starts_with("type-"), ~ as.numeric(factor(.x, ann_typs)))) %>%
+  column_to_rownames(".cell_id") %>%
+  as.matrix() %>%
+  t()
+
+ann_clsts <- kmeans(ann_mat, centers = 10)
+
+ann_clst_res <- tibble(
+  key = names(ann_clsts$cluster),
+  id  = unname(ann_clsts$cluster),
+  type = "all"
+) %>%
+  separate(key, into = c("blank", "rsln", "n_genes"), sep = "-") %>%
+  dplyr::select(-blank) %>%
+  group_by(id) %>%
+  mutate(n = n()) %>%
+  dplyr::slice(1) %>%
+  ungroup() %>%
+  arrange(desc(n)) %>%
+  mutate(id = row_number())
+```
+
+```{r "lec refined annotations", eval = create_obj}
+# Adjust clusters based on Marco expression
+lec_clst <- str_c("RNA_snn_res.", params$lec_res)
 
 so_lec <- so_lec %>%
+  mutate_meta(mutate, lec_subtype = top_type) %>%
+  classify_markers(
+    feats    = "Marco",
+    filt     = Marco > 0.5,
+    type     = "Marco_LEC",
+    clst_col = lec_clst,
+    type_col = "lec_subtype"
+  )
+
+# Adjust unassigned clusters based on Pdpn and Pecam1 expression
+so_lec <- so_lec %>%
+  classify_markers(
+    feats    = c("Pdpn", "Pecam1"),
+    filt     = Pdpn < 0.1 & Pecam1 > 0.5,
+    type     = "BEC",
+    clst_col = lec_clst,
+    type_col = "lec_subtype"
+  )
+
+# Add LEC subsets to object
+# Identify CHIKV-high subsets
+so_merge <- so_merge %>%
+  AddMetaData(FetchData(so_lec, "lec_subtype")) %>%
   mutate_meta(
     mutate,
-    lec_type = !!sym(lec_clmn),
+    lec_type    = recode(lec_subtype, unassigned = "unassigned-LEC"),
+    lec_type    = ifelse(is.na(lec_type), cell_type, lec_type),
+    lec_subtype = replace_na(lec_subtype, "other"),
     
-    lec_type_clst = if_else(
-      lec_type == "unassigned",
-      str_c(lec_type, "-", !!sym(lec_clst_clmn)),
-      lec_type
-    )
-  )
-
-# # Add LEC subtypes back to original object
-# so <- so %>%
-#   AddMetaData(
-#     metadata = so_lec$lec_type,
-#     col.name = "lec_type"
-#   ) %>%
-#   mutate_meta(
-#     mutate,
-#     lec_subtype = replace_na(lec_type, "other"),
-#     lec_type    = recode(lec_type, "unassigned" = "unassigned-LEC"),
-#     lec_type    = if_else(lec_subtype == "other", cell_type, lec_type),
-#     subtype     = lec_type
-#   )
-
-# new <- so_lec_merge %>%
-#   clustify(
-#     ref_mat = ref_lec,
-#     cluster_col = "RNA_snn_res.4.2",
-#     n_genes = 0,
-#     threshold = 0.5
-#   )
-
-```
-
-```{r "integrate treatments", eval = create_so}
-# For LEC annotations, integrate treatments
-
-# Treatment groups
-treats <- so_lec$treatment %>%
-  unique() %>%
-  sort()
-
-chikv_infctd <- treats[1]
-
-# Variables to regress out
-# vars_to_regress <- c("pct_mito", "nCount_RNA", "S.Score", "G2M.Score")
-vars_to_regress <- c("pct_mito", "nCount_RNA")
-
-# Clustering resolutions
-# int_rslns <- c(0.5, 1, 3, 5)
-int_rslns <- 1:10
-int_clsts <- set_clst_names(int_rslns, assay = "integrated")
-
-int_res       <- 3
-int_clmn      <- int_clsts[[as.character(int_res)]]
-int_clst_clmn <- int_clmn$clst
-int_clmn      <- str_c(int_clmn$type, "_type")
-
-# Cluster each treatment separately
-so_treats <- set_names(treats) %>%
-  map(~ {
-    so_lec %>%
-      subset_sobj(
-        treatment == .x,
-        dims         = 1:40,
-        rsln         = int_rslns,
-        regress_vars = vars_to_regress
-      )
-  })
-
-# Integration features
-features <- SelectIntegrationFeatures(object.list = so_treats)
-
-# Scale data using integration features
-so_int <- so_treats %>%
-  map(~ {
-    .x %>%
-      ScaleData(features = features) %>%
-      RunPCA(features = features)
-  })
-
-# Get integration anchors and integrate
-int_anchors <- so_int %>%
-  FindIntegrationAnchors(
-    anchor.features = features,
-    reduction = "rpca"
-  )
-
-so_int <- IntegrateData(
-  anchorset = int_anchors,
-  normalization.method = "LogNormalize"
+    chikv_type = if_else(chikv_grp == chikv_grps[2], lec_type, chikv_grp)
 )
 
-rm(int_anchors)
+# Add subsets to 8 and 24 hpi objects
+clmns <- c("cell_type", "lec_type", "lec_subtype", "frc_type", "frc_subtype", "chikv_type")
 
-# Scale and cluster integrated data
-DefaultAssay(so_int) <- "integrated"
-
-so_int <- so_int %>%
-  ScaleData(vars.to.regress = vars_to_regress) %>%
-  RunPCA() %>%
-  RunUMAP(dims = 1:30, reduction.key = "intUMAP_") %>%
-  FindNeighbors(dims = 1:30) %>%
-  FindClusters(resolution = int_rslns)
-
-so_int <- so_int %>%
-  AddMetaData(FetchData(., str_c("intUMAP_", 1:2)))
-
-# DefaultAssay(so_int) <- "RNA"
-
-# Annotate LEC subsets
-so_int <- so_int %>%
-  mutate_meta(select, -starts_with("res_"))
-
-int_clsts %>%
-  iwalk(~ {
-    so_int <<- so_int %>%
-      mutate_meta(select, -intUMAP_1, -intUMAP_2) %>%
-      clustify(
-        ref_mat       = ref_lec,
-        cluster_col   = .x$clst,
-        rename_prefix = .x$type,
-        threshold     = 0.5,
-        n_genes = 0
-      )
-  })
-
-so_int %>%
-  qsave(file.path(so_dir, "so_int.qs"))
-
-# # PLOTS
-# so_int %>%
-#   plot_scatter(
-#     "res_5_type",
-#     "intUMAP_1", "intUMAP_2"
-#   ) +
-#   facet_wrap(tm ~ treatment, nrow = 1) +
-#   theme(aspect.ratio = 0.9)
-# 
-# so_int %>%
-#   mutate_meta(
-#     mutate,
-#     NEW = ifelse(res_5_type != "BEC", str_c(res_5_type, "-", integrated_snn_res.5), "BEC")
-#   ) %>%
-#   subset(res_5_type == "fLEC") %>%
-#   # plot_violin("nFeature_RNA", "NEW", method = "boxplot") +
-#   plot_scatter("NEW", "intUMAP_1", "intUMAP_2") +
-#   theme(aspect.ratio = 0.9) +
-#   facet_wrap(tm ~ treatment, nrow = 1)
+type_dat <- FetchData(so_merge, clmns)
+so_8     <- AddMetaData(so_8, type_dat)
+so_24    <- AddMetaData(so_24, type_dat)
 ```
 
-```{r "integrated LEC annotations", eval = FALSE}
-# Do annotations change if BECs are removed and LECs are reclustered?
-# annotations appear similar
-
-# Remove BECs and re-cluster
-so_lec_int <- so_int %>%
-  subset(res_5_type != "BEC") %>%
-  ScaleData(vars.to.regress = vars_to_regress) %>%
-  RunPCA() %>%
-  RunUMAP(dims = 1:30, reduction.key = "intUMAP_") %>%
-  FindNeighbors(dims = 1:30) %>%
-  FindClusters(resolution = int_rslns)
-
-so_lec_int <- so_lec_int %>%
-  mutate_meta(select, -str_c("intUMAP_", 1:2)) %>%
-  AddMetaData(FetchData(., str_c("intUMAP_", 1:2)))
-
-x <- so_lec_int %>%
-  FindClusters(resolution = int_rslns)
-
-DefaultAssay(x) <- "RNA"
-
-x <- x %>%
-  mutate_meta(select, -starts_with("res_"))
-
-int_clsts %>%
-  iwalk(~ {
-    # so_lec_int <<- so_lec_int %>%
-    x <<- x %>%
-      mutate_meta(select, -str_c("intUMAP_", 1:2)) %>%
-      clustify(
-        ref_mat       = ref_lec,
-        cluster_col   = .x$clst,
-        rename_prefix = .x$type,
-        threshold     = 0.55
-      )
-  })
-
-# Create plots
-# int_rslns %>%
-#   str_c("res_", ., "_type") %>%
-#   map(~ {
-#     plot_scatter(
-#       input = x,
-#       data_col = .x,
-#       "intUMAP_1",
-#       "intUMAP_2"
-#     ) +
-#       facet_wrap(tm ~ treatment, nrow = 1) +
-#       theme(aspect.ratio = 0.9)
-#   })
-
-feat <- "Clu"
-feat <- "Madcam1"
-feat <- "Vcam1"
-feat <- "Marco"
-feat <- "res_5_type"
-feat <- "res_5_r"
-feat <- "nFeature_RNA"
-feat <- "chikv_grp"
-feat <- "integrated_snn_res.5"
-
-trns <- "identity"
-trns <- "log10"
-
-x %>%
-  plot_scatter(feat, "intUMAP_1", "intUMAP_2", trans = trns, size = 0.5) +
-  facet_wrap(tm ~ treatment, nrow = 1) +
-  theme(aspect.ratio = 0.9)
-
-x %>%
-  plot_violin(feat, "res_5_type", method = "boxplot") +
-  facet_wrap(tm ~ treatment, nrow = 1)
-
-# Correlation matrix
-mat <- x %>%
-  subset(treatment == "CHIKV") %>%
-  subset(tm == "24hpi") %>%
-  subset(chikv_grp == "CHIKV-high") %>%
-  clustify(
-    ref_mat = ref_lec,
-    cluster_col = "integrated_snn_res.5",
-    # cluster_col = "res_5_type",
-    seurat_out  = FALSE
-  )
+```{r "save objects", eval = create_obj}
+save_objs(so_merge, ob_dir = params$so_dir)
+save_objs(so_frc,   ob_dir = params$so_dir)
+save_objs(so_lec,   ob_dir = params$so_dir)
+save_objs(so_8,     ob_dir = params$so_dir)
+save_objs(so_24,    ob_dir = params$so_dir)
 ```
 
-```{r "add original chikv-high cells", eval = FALSE}
-# Want to see where the CHIKV-high cells originally identified for 24hpi data
-# 2021-01-08 fall on integrated projection
-# Original CHIKV-high cells generally align with new LEC subtype annotations
-# the unassigned-high group is divided between BECs, and potentially tzLECs
-
-old <- read_rds("~/Dropbox/Ryan/Projects/morrison-scRNA-seq/results/2021-01-08/sobjs/so.rds")
-
-old_chikv_high <- old %>%
-  FetchData(c("chikv_grp", "lec_subtype", "orig.ident")) %>%
-  filter(chikv_grp == "CHIKV-high") %>%
-  mutate(
-    chikv_grp = str_remove(chikv_grp, "^CHIKV-"),
-    chikv_grp = str_c(lec_subtype, "-", chikv_grp)
-  ) %>%
-  select(-lec_subtype, orig_chikv_grp = chikv_grp, orig.ident) %>%
-  mutate(strip_bc = str_remove(rownames(.), "_[0-9]+$"))
-
-new_dat <- so_int@meta.data %>%
-  filter(tm == "24hpi") %>%
-  select(orig.ident, treatment, rep) %>%
-  mutate(
-    orig.ident = str_c(treatment, "-", rep),
-    cell_bc = rownames(.),
-    strip_bc = str_remove(cell_bc, "_[0-9_]+$"),
-    .keep = "none"
-  )
-
-old_chikv_high <- old_chikv_high %>%
-  inner_join(new_dat, by = c("orig.ident", "strip_bc")) %>%
-  select(-c(orig.ident, strip_bc)) %>%
-  column_to_rownames("cell_bc")
-
-x <- so_int %>%
-  AddMetaData(old_chikv_high)
-
-x %>%
-  plot_scatter("orig_chikv_grp", "intUMAP_1", "intUMAP_2") +
-  facet_wrap(tm ~ treatment, nrow = 1) +
-  theme(aspect.ratio = 0.9)
-
-x %>%
-  plot_scatter("Marco", "intUMAP_1", "intUMAP_2") +
-  facet_wrap(tm ~ treatment, nrow = 1) +
-  theme(aspect.ratio = 0.9)
+```{r "load objects"}
+# so_merge <- qread(file.path(params$so_dir, "so_merge.qs"))
+so_lec   <- qread(file.path(params$so_dir, "so_lec.qs"))
+so_8     <- qread(file.path(params$so_dir, "so_8.qs"))
+so_24    <- qread(file.path(params$so_dir, "so_24.qs"))
 ```
 
-```{r "clustify using original 24hpi annotations", eval = FALSE}
-# Want to see how LEC subset annotations look when using a reference generated
-# from 2021-01-08 mock data
-# These annotations do not look very accurate
+```{r "theme"}
+# Set levels
+sam_lvls <- unique(so_24$orig.ident)
+treats   <- unique(so_24$treatment)
 
-# Create reference matrix
-x <- old %>%
-  subset(treatment == "mock") %>%
-  subset(cell_type %in% "Endothelial cells") %>%
-  subset(lec_subtype != "unassigned")
+# ggplot2 themes
+txt_pt1  <- 10
+txt_pt2  <- 12
+ttl_pt1  <- 14
+ttl_pt2  <- 16
+ln_pt    <- 0.5
+ln_col   <- "grey85"
+cir_size <- 3.5
+sqr_size <- 4
 
-typs <- x@meta.data %>%
-  group_by(lec_subtype) %>%
-  filter(n() > 200) %>%
-  pull(lec_subtype) %>%
-  unique()
-
-x <- x %>%
-  subset(lec_subtype %in% typs)
-
-meta <- x %>%
-  FetchData("lec_subtype")
-
-x <- x@assays$RNA@data
-
-ref_24hpi <- x %>%
-  average_clusters(
-    metadata = meta,
-    cluster_col = "lec_subtype"
-   )
-
-# Assign LEC subtypes
-x <- so_int
-
-DefaultAssay(x) <- "RNA"
-
-x <- x %>%
-  mutate_meta(select, -any_of("type")) %>%
-  clustify(
-    ref_mat = ref_24hpi,
-    cluster_col = "integrated_snn_res.5",
-    # cluster_col = "integrated_snn_res.10",
-    threshold = 0.5
-  )
-
-x %>%
-  plot_scatter("type", "intUMAP_1", "intUMAP_2") +
-  facet_wrap(tm ~ treatment, nrow = 1) +
-  theme(aspect.ratio = 0.9)
-```
-
-
-
-
-
-```{r "clustify fibroblasts", eval = create_so}
-# Classify non-endothelial stromal cell types
-# ref_fib is ref_lymphnodestromal with immgen fibroblast references added
-so_fib <- so %>%
-  subset_sobj(
-    subset       = cell_type %in% fib_cell_types,
-    rsln         = rslns,
-    dims         = 1:40,
-    cluster_data = TRUE,
-    regress_vars = "nCount_RNA"
-  )
-
-fib_clsts %>%
-  iwalk(~ {
-    so_fib <<- so_fib %>%
-      mutate_meta(select, -UMAP_1, -UMAP_2) %>%
-      clustify(
-        ref_mat       = ref_lymphnodestromal,
-        cluster_col   = .x$clst,
-        rename_prefix = .x$type,
-        threshold     = 0.65
-      )
-  })
-
-# Set fibroblast/stromal cell types
-fib_clmn <- as.character(params$fib_res)
-fib_clmn <- fib_clsts[[fib_clmn]]$type
-fib_clmn <- str_c(fib_clmn, "_type")
-
-so_fib <- so_fib %>%
-  mutate_meta(
-    mutate,
-    fib_type = !!sym(fib_clmn),
-    
-    fib_type_clst = if_else(
-      fib_type == "unassigned",
-      str_c(fib_type, "-", !!sym(fib_clst_clmn)),
-      fib_type
-    )
-  )
-
-# Add fibroblast/stromal subtypes back to original object
-x <- x %>%
-  AddMetaData(
-    metadata = so_fib$fib_type,
-    col.name = "fib_type"
-  ) %>%
-  mutate_meta(
-    mutate,
-    fib_subtype = replace_na(fib_type, "other"),
-    fib_type    = recode(lec_type, "unassigned" = "unassigned-fib"),
-    fib_type    = if_else(fib_subtype == "other", cell_type, fib_type),
-    subtype     = if_else(fib_subtype == "other", subtype, fib_type)
-  )
-```
-
-```{r "params"}
-# Set directories
-so_dir    <- here(params$enr_dir, params$so_dir)
-table_dir <- here(params$enr_dir, params$table_dir)
-geo_dir   <- here(params$enr_dir, params$geo_dir)
-metrics   <- here(params$enr_dir, params$metrics)
-
-# Should objects be created
-# objects to check for
-load_objs <- c(
-  "so",
-  "so_lec",
-  "so_fib",
-  "so_enr"
+txt_theme_1 <- theme(
+  strip.text  = element_text(size = ttl_pt2),
+  legend.text = element_text(size = txt_pt2),
+  axis.title  = element_text(size = ttl_pt2),
+  axis.text   = element_text(size = txt_pt2)
 )
 
-files_in <- load_objs %>%
-  str_c(".rds") %>%
-  here(so_dir, .)
+line_theme <- theme(
+  axis.line.x  = element_line(linewidth = ln_pt, color = ln_col),
+  axis.line.y  = element_line(linewidth = ln_pt, color = ln_col),
+  axis.ticks.x = element_line(linewidth = ln_pt, color = ln_col),
+  axis.ticks.y = element_line(linewidth = ln_pt, color = ln_col)
+)
 
-create_so <- files_in %>%
-  map_lgl(~ !file.exists(here(.x))) %>%
-  any()
+base_theme <- djvdj_theme() +
+  theme(
+    plot.title       = element_text(face = "plain", size = ttl_pt2),
+    strip.background = element_blank(),
+    strip.text       = element_text(face = "plain")
+  ) +
+  txt_theme_1
 
-# Clustering parameters
-rslns <- c(3.4, 4.2, 5)
+umap_theme <- base_theme +
+  theme(
+    panel.border = element_rect(color = NA, fill = NA),
+    axis.title   = element_blank(),
+    axis.line.x  = element_blank(),
+    axis.line.y  = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text    = element_blank()
+  )
 
-type_clsts <- rslns %>%
-  set_clst_names()
+fade_0 <- "#FAFAFA"
+fade_1 <- "#F0F0F0"
+fade_2 <- "#D9D9D9"
 
-type_clst_clmn <- type_clsts %>%
-  pluck(as.character(params$type_res), "clst")
+hist_y_lab <- "number of cells"
 
-lec_clsts <- rslns %>%
-  set_clst_names("lec_")
+# alpha for plots
+al <- 0.7
 
-lec_clst_clmn <- lec_clsts %>%
-  pluck(as.character(params$lec_res), "clst")
+# Okabe Ito color palettes
+ito_cols <- c(
+  palette_OkabeIto[c(1:3, 5)], "#D7301F",
+  palette_OkabeIto[c(4, 6)],   "#6A51A3",
+  palette_OkabeIto[7],         "#875C04",
+  "#065D43", "#F7AF34", "#00446E"
+)
+
+ito_cols <- ito_cols[3:length(ito_cols)] %>%
+  darken(0.2) %>%
+  c(ito_cols, ., "#686868", "#000000")
+
+# Set sample colors
+get_cols <- create_col_fun(ito_cols)
+
+sam_cols <- c(
+  # "#F03B20", "#FD8D3C",
+  "#BD0026", "#FECC5C", "#FFFFB2",
+  # "#0072B2", "#56B4E9",
+  "#00446E", "#035B8F", "#2A8FBF"
+)
+
+names(sam_cols) <- sam_lvls
+
+# CHIKV treatment groups
+chikv_infctd <- so_24@meta.data %>%
+  group_by(treatment) %>%
+  summarize(mn = mean(nCount_CHIKV), .groups = "drop") %>%
+  filter(mn == max(mn)) %>%
+  pull(treatment)
+
+# Cell type colors
+type_cols <- unique(so_24$cell_type)
+type_cols <- set_names(ito_cols[seq_along(type_cols)], type_cols)
+
+type_cols["unassigned"] <- "#999999"
+
+subtype_cols <- c(colnames(ref_lec), colnames(ref_fib))
+subtype_cols <- set_names(ito_cols[seq_along(subtype_cols)], subtype_cols)
+subtype_cols["unassigned"] <- "#999999"
+subtype_cols["other"]      <- fade_0
+subtype_cols["CD34+ SC"]   <- "#534379"
+
+lec_type_cols <- c(subtype_cols, type_cols[names(type_cols) != "unassigned"])
+lec_type_cols["CHIKV-low"]      <- "white"
+lec_type_cols["T cells"]        <- "black"
+lec_type_cols["B cells"]        <- "#875C04"
+lec_type_cols["FRC"]            <- "#00375B"
+lec_type_cols["PvC"]            <- "#065D43"
+lec_type_cols["unassigned-LEC"] <- "#676767"
+
+
+lec_type_cols <- so_24$lec_type %>%
+  table() %>%
+  sort(decreasing = TRUE) %>%
+  names()
+
+lec_type_cols <- lec_type_cols[lec_type_cols != "unassigned"]
+
+lec_type_cols <- set_names(
+  ito_cols[seq_along(lec_type_cols)],
+  lec_type_cols
+)
+
+lec_type_cols["unassigned"] <- "grey70"
+
+old_cols <- lec_type_cols
+
+lec_type_cols["FRC"]   <- old_cols["Valve"]
+lec_type_cols["Valve"] <- old_cols["fLEC"]
+lec_type_cols["fLEC"]  <- old_cols["FRC"]
+
+# CHIKV clusters colors
+grp_cols <- set_names(
+  c("#56B4E9", "#0072B2"),
+  chikv_grps
+)
+
+n_reps <- n_distinct(so_24$rep)
+
+grp_rep_cols <- grp_cols %>% 
+  imap(~ set_names(
+    rep(.x, n_reps),
+    str_c(.y, "-", 1:n_reps)
+  )) %>%
+  flatten_chr()
+
+# Vectors to modify cell type labels for plotting
+new_cell_labs <- c(
+  Valve      = "Valve LEC",
+  Collecting = "Collecting LEC",
+  Ptx3_LEC   = "Ptx3 LEC"
+)
+
+marco_expr <- c(Marco_LEC = "\"Marco\"^\"+\"*\" LEC\"")
+```
+
+
+
+```{r "prepare 8hpi object", eval = FALSE}
+
+lec_cell_types <- "Endothelial cells"
+fib_cell_types <- c("Fibroblasts", "Stromal cells", "Stromal cells (DN)")
+
+so_8_dir <- here(params$so_dir, "so_8.qs")
+
+rslns <- c(1, 2, 4, 5)
 
 fib_clsts <- rslns %>%
   set_clst_names("fib_")
@@ -1164,309 +1963,196 @@ fib_clsts <- rslns %>%
 fib_clst_clmn <- fib_clsts %>%
   pluck(as.character(params$fib_res), "clst")
 
-# Cell types to use for identifying subsets
-lec_cell_types <- "Endothelial cells"
-fib_cell_types <- c("Fibroblasts", "Stromal cells (DN)")
-
-# Treatment labels
-treats <- c(
-  M  = "mock",
-  AF = "CHIKV"
-)
-
-# CHIKV group labels
-chikv_grps <- c("CHIKV-low", "CHIKV-high")
-
-```
-
-```{r "references"}
-
-# LEC reference
-ref_lec <- ref_immgen[, grepl("^Endothelial cells", colnames(ref_immgen))]
-ref_lec <- ref_lec[rownames(ref_lec) %in% rownames(ref_LEC_xiang), ]
-
-colnames(ref_lec) <- colnames(ref_lec) %>%
-  str_replace("Endothelial cells \\(BEC\\)", "BEC")
-
-ref_LEC_xiang <- ref_LEC_xiang[rownames(ref_lec), ]
-
-if (!identical(rownames(ref_LEC_xiang), rownames(ref_lec))) {
-  stop("LEC reference rownames do not match.")
-}
-
-ref_lec <- cbind(ref_LEC_xiang, ref_lec)
-ref_lec <- ref_lec[, !grepl("^Endothelial cells", colnames(ref_lec))]
-
-# Fibroblast/stromal cell reference
-ref_fib <- ref_immgen[, grepl("^Fibroblast", colnames(ref_immgen))]
-ref_fib <- ref_fib[rownames(ref_fib) %in% rownames(ref_lymphnodestromal), ]
-
-ref_lymphnodestromal <- ref_lymphnodestromal[rownames(ref_fib), ]
-
-if (!identical(rownames(ref_lymphnodestromal), rownames(ref_fib))) {
-  stop("Fibroblast/stromal reference rownames do not match.")
-}
-
-ref_fib <- cbind(ref_lymphnodestromal, ref_fib)
-
-```
-
-```{r "OLD create objects", include = FALSE, eval = create_so}
-
-# Create Seurat object
-mats <- params$samples %>%
-  set_names() %>%
-  map_chr(~ here(file.path(params$unenr_dir, .x, "outs/filtered_feature_bc_matrix")))
-
-sobjs <- mats %>%
-  imap(~ create_virus_obj(
-    mat_dir     = .x,
-    proj_name   = .y,
-    gene_min    = params$gene_min,
-    gene_max    = params$gene_max,
-    mito_max    = params$mito_max,
-    virus_str   = "^CHIKV",
-    virus_assay = "CHIKV"
-  ))
-
-# Calculate CHIKV stats
-# since there are very few cells with detectable CHIKV counts, did not adjust
-# QC filter based on CHIKV counts
-sobjs <- sobjs %>%
-  map(~ {
-    .x %>%
-      mutate_meta(
-        mutate,
-        pct_CHIKV      = nCount_CHIKV / (nCount_RNA + nCount_CHIKV),
-        CHIKV_sgRNA_fc = (CHIKV_sgRNA + 1) / (CHIKV_5 + 1),
+if (!file.exists(so_8_dir)) {
+  so_8 <- read_rds(file.path(params$orig_so_dir, "2021-07-16/sobjs/so.rds"))
+  
+  # Cluster 27 appears to be FRCs based on Pdpn, Pecam1, and Pdgfra
+  # Clusters 10 and 22 appear to be BECs based on Pdpn and Pecam1
+  so_8 <- so_8 %>%
+    mutate_meta(
+      mutate,
+      cell_type = ifelse(RNA_snn_res.5 == "27", "Fibroblasts", cell_type),
+      cell_type = ifelse(RNA_snn_res.5 %in% c("10", "22"), "Endothelial cells", cell_type)
+    )
+  
+  # Classify non-endothelial stromal cell types
+  # ref_fib is ref_lymphnodestromal with immgen fibroblast references added
+  so_fib <- so_8 %>%
+    subset_sobj(
+      subset       = cell_type %in% fib_cell_types,
+      rsln         = rslns,
+      dims         = 1:40
+      # regress_vars = "nCount_RNA"
+    )
+  
+  fib_clsts %>%
+    iwalk(~ {
+      so_fib <<- so_fib %>%
+        mutate_meta(dplyr::select, -UMAP_1, -UMAP_2) %>%
+        clustify(
+          # ref_mat       = ref_lymphnodestromal,
+          ref_mat       = ref_fib,
+          cluster_col   = .x$clst,
+          rename_prefix = .x$type,
+          threshold     = 0.65
+        )
+    })
+  
+  # Set fibroblast/stromal cell types
+  fib_clmn <- as.character(params$fib_res)
+  fib_clmn <- fib_clsts[[fib_clmn]]$type
+  fib_clmn <- str_c(fib_clmn, "_type")
+  
+  so_fib <- so_fib %>%
+    mutate_meta(
+      mutate,
+      fib_type = !!sym(fib_clmn),
+      
+      fib_type_clst = if_else(
+        fib_type == "unassigned",
+        str_c(fib_type, "-", !!sym(fib_clst_clmn)),
+        fib_type
       )
-  })
-
-# Format sample/replicate names
-sobjs <- sobjs %>%
-  map(~ {
-    .x %>%
-      mutate_meta(
-        mutate,
-        treatment = str_extract(orig.ident, "^[A-Z]+"),
-        treatment = treats[treatment],
-        rep       = str_extract(orig.ident, "[0-9]+$"),
-        tm        = params$tm,
-        sample    = str_c(treatment, tm, rep, sep = "-")
-      )
-  })
-
-# Filter, normalize, and merge objects
-# CELL CALLS FROM CELLRANGER DO NOT LOOK AS ACCURATE FOR AF2
-# REMOVE CELLS WITH <= 800 UMIs
-# SHOULD MODIFY CODE TO CHANGE QC CLASS FOR RAW OBJECT!!
-so <- sobjs %>%
-  map(~ {
-    .x %>%
-      subset(orig.ident != "AF2" | nCount_RNA > 800) %>%
-      subset(subset = qc_class == "pass") %>%
-      norm_sobj(
-        cc_scoring = TRUE,
-        rna_method = "LogNormalize",
-        scale_data = FALSE
-      )
-  })
-
-so <- merge(so[[1]], so[2:length(so)])
-
-# Cluster cells
-so <- so %>%
-  FindVariableFeatures(
-    assay            = "RNA",
-    selection.method = "vst",
-    nfeatures        = 2000
-  ) %>%
-  ScaleData(
-    assay           = "RNA",
-    vars.to.regress = "nCount_RNA"
-  ) %>%
-  cluster_RNA(
-    resolution = rslns,
-    dims       = 1:40
-  )
-
-# Save unfiltered objects and meta.data
-# Save and delete raw objects asap to free up memory
-so_raw <- merge(sobjs[[1]], sobjs[2:length(sobjs)])
-
-so_raw_df <- so_raw@meta.data %>%
-  as_tibble(rownames = "cell_id")
-
-save_objs(so_raw)
-
-rm(sobjs, so_raw)
-
-```
-
-```{r "add enriched CHIKV counts", eval = create_so}
-
-# Create Seurat object for CHIKV-enriched data
-mat <- params$samples %>%
-  set_names() %>%
-  map_chr(~ here(params$enr_dir, .x, "outs/filtered_feature_bc_matrix"))
-
-so_enr <- mat %>%
-  imap(~ {
-    .x %>%
-      create_virus_obj(
-        proj_name   = .y,
-        virus_str   = "^CHIKV",
-        virus_assay = "CHIKV"
-      ) %>%
-      mutate_meta(
-        mutate,
-        pct_CHIKV = nCount_CHIKV / (nCount_CHIKV + nCount_RNA)
-      )
-  })
-
-so_enr <- merge(so_enr[[1]], so_enr[2:length(so_enr)])
-
-# Add new CHIKV counts to meta.data from unfiltered Seurat objects
-chikv_feats <- c(
-  "5"            = "chikv_CHIKV-AF15561-5",
-  "sgRNA"        = "chikv_CHIKV-AF15561-sgRNA",
-  "neg"          = "chikv_CHIKV-AF15561-neg",
-  "nCount_CHIKV" = "nCount_CHIKV",
-  "pct_CHIKV"    = "pct_CHIKV",
-  "nCount_RNA"   = "nCount_RNA"
-)
-
-get_feats <- c("orig.ident", chikv_feats)
-
-so_enr_df <- so_enr %>%
-  FetchData(get_feats) %>%
-  rename(!!!chikv_feats) %>%
-  rename_with(~ str_c("enr_", .x), .cols = all_of(names(chikv_feats))) %>%
-  rownames_to_column("cell_id")
-
-so_enr_df <- so_raw_df %>%
-  full_join(so_enr_df, by = c("cell_id", "orig.ident"))
-
-clmns <- c(
-  "cell_id",   "orig.ident",
-  "UMAP_1",    "UMAP_2",
-  "cell_type", "lec_type",
-  "fib_type" 
-)
-
-so_enr_df <- so@meta.data %>%
-  as_tibble(rownames = "cell_id") %>%
-  select(all_of(clmns)) %>%
-  full_join(so_enr_df, by = c("cell_id", "orig.ident"))
-
-# Format enriched counts
-enr_counts <- so_enr_df %>%
-  mutate(
-    across(starts_with("enr_"), replace_na, 0),
-    tot_nCount_CHIKV = nCount_CHIKV + enr_nCount_CHIKV,
-    tot_nCount_RNA   = nCount_RNA + enr_nCount_RNA,
-    tot_pct_CHIKV    = (tot_nCount_CHIKV / tot_nCount_RNA) * 100,
+    )
+  
+  so_fib_24 <- so_24 %>%
+    subset_sobj(
+      subset       = fib_subtype != "other",
+      rsln         = rslns,
+      dims         = 1:40
+      # regress_vars = "nCount_RNA"
+    )
+  
+  so_fib_24 <- so_fib_24 %>%
+    RunHarmony("treatment", lambda = 0.01) %>%
+    RunUMAP(reduction = "harmony", dims = 1:40)
     
-    tot_5     = CHIKV_5 + enr_5,
-    tot_sgRNA = CHIKV_sgRNA + enr_sgRNA,
-    tot_neg   = CHIKV_neg   + enr_neg
-  ) %>%
-  select(cell_id, starts_with("tot")) %>%
-  column_to_rownames("cell_id")
-
-# Add enriched counts to object
-so <- so %>%
-  AddMetaData(enr_counts)
-
-so_df <- so@meta.data %>%
-  as_tibble(rownames = "cell_id")
-
-# Add enriched counts to LEC object
-so_lec_enr <- so_lec %>%
-  AddMetaData(enr_counts)
-
-so_lec_enr_df <- so_lec_enr@meta.data %>%
-  as_tibble(rownames = "cell_id")
-
+    
+  
+  all_fib <- merge(so_fib, so_fib_24) %>%
+    FindVariableFeatures() %>%
+    ScaleData() %>%
+    RunPCA() %>%
+    RunUMAP(reduction = "pca", dims = 1:40)
+    
+  # Add fibroblast/stromal subtypes back to original object
+  so_8 <- so_8 %>%
+    AddMetaData(
+      metadata = so_fib$fib_type,
+      col.name = "fib_type"
+    ) %>%
+    mutate_meta(
+      mutate,
+      fib_subtype = replace_na(fib_type, "other"),
+      fib_type    = recode(lec_type, "unassigned" = "unassigned-fib"),  # THIS IS A TYPO
+      fib_type    = if_else(fib_subtype == "other", cell_type, fib_type),
+      subtype     = if_else(fib_subtype == "other", subtype, fib_type)
+    )
+}
 ```
 
-```{r "save objects", eval = create_so}
+```{r "prepare 24hpi object", eval = FALSE}
+# Directories to save modified objects
+so_24_dir <- here(params$so_dir, "so_24.qs")
 
-# Save Seurat object
-save_objs(so)
+# Replace this with setup.Rmd that has code used to process each sample
+if (!file.exists(so_24_dir)) {
+  so_24 <- read_rds(file.path(params$orig_so_dir, "2021-01-08/sobjs/so.rds"))
+  
+  # Adjust 24 hpi
+  # Add PvCs to cell types
+  # This is based on clustifyr results using ref_lymphnodestromal, and Pecam1,
+  # Pdpn, Itga7, and Acta2 expression
+  so_24 <- so_24 %>%
+    mutate_meta(
+      mutate,
+      cell_type = case_when(
+        fib_type == "PvC"             ~ fib_type,
+        cell_type %in% fib_cell_types ~ "FRC",
+        TRUE                          ~ cell_type
+      )
+    )
+  
+  so_24 <- so_24 %>%
+    mutate_meta(
+      mutate,
+      lec_subtype = recode(lec_subtype, unassigned = "unassigned-LEC"),
+      lec_type = case_when(
+        cell_type %in% lec_cell_types ~ lec_subtype,
+        TRUE                          ~ cell_type
+      )
+    )
+  
+  so_24 <- so_24 %>%
+    mutate_meta(
+      mutate,
+      subtype = ifelse(lec_subtype == "other", fib_subtype, lec_subtype)
+    )
+  
+  so_24 <- so_24 %>%
+    mutate_meta(
+      mutate,
+      chikv_type = if_else(chikv_grp == chikv_grps[2], lec_type, chikv_grp)
+    )
+  
+  # Adjust 8 hpi
+  # Cluster 27 appears to be FRCs based on Pdpn, Pecam1, and Pdgfra
+  # Adjust subtype column
+  so_8 <- so_8 %>%
+    mutate_meta(
+      mutate,
+      fib_type = if_else(fib_subtype == "other", cell_type, fib_subtype),
+      cell_type = case_when(
+        fib_type == "PvC"             ~ fib_type,
+        cell_type %in% fib_cell_types ~ "FRC",
+        TRUE                          ~ cell_type
+      )
+    )
+  
+  so_8 <- so_8 %>%
+    mutate_meta(
+      mutate, 
+      orig.ident = str_c(treatment, "-", rep),
+      lec_type = case_when(
+        lec_subtype == "unassigned"   ~ lec_subtype,  # replace unassigned-LEC label
+        cell_type %in% lec_cell_types ~ lec_subtype,
+        TRUE                          ~ cell_type
+      ),
+      chikv_grp = ifelse(tot_nCount_CHIKV > 0, chikv_grps[2], chikv_grps[1])
+    )
+  
+  so_8 <- so_8 %>%
+    mutate_meta(
+      mutate,
+      subtype = ifelse(lec_subtype == "other", fib_subtype, lec_subtype)
+    )
+  
+  ### NEED TO UPDATE THIS FOR SUBTYPES ###
+  # add cluster to so_fib, re-cluster, re-annotate
+  so_8 <- so_8 %>%
+    mutate_meta(
+      mutate,
+      lec_type  = ifelse(RNA_snn_res.5 == "27", "FRC", lec_type),
+      cell_type = ifelse(RNA_snn_res.5 == "27", "FRC", cell_type)
+    )
+  
+  # Save objects
+  qsave(so_8, so_8_dir)
+  qsave(so_24, so_24_dir)
+  
+  rm(so_8, so_24)
+}
 
-# Save LEC object
-so_lec_df <- so_lec@meta.data %>%
-  as_tibble(rownames = "cell_id")
+so_8  <- qread(so_8_dir)
+so_24 <- qread(so_24_dir)
 
-save_objs(so_lec)
+so_merge_df <- bind_rows(so_8@meta.data, so_24@meta.data)
 
-# Save FRC object
-so_fib_df <- so_fib@meta.data %>%
-  as_tibble(rownames = "cell_id")
+# Load LEC objects
+so_lec_8  <- read_rds(file.path(params$orig_so_dir, "2021-07-16/sobjs/so_lec.rds"))
+so_lec_24 <- read_rds(file.path(params$orig_so_dir, "2021-01-08/sobjs/so_lec.rds"))
 
-save_objs(so_fib)
-
-# Save enriched objects
-so_enr %>%
-  write_rds(here(so_dir, "so_enr.rds"))
-
-so_enr_df %>%
-  write_tsv(here(so_dir, "so_enr.tsv.gz"))
-
-so_lec_enr %>%
-  write_rds(here(so_dir, "so_lec_enr.rds"))
-
-so_lec_enr_df %>%
-  write_tsv(here(so_dir, "so_lec_enr.tsv.gz"))
-
-```
-
-```{r "load objects", eval = !create_so}
-
-# Load Seurat objects
-so <- read_rds(here(so_dir, "so.rds"))
-
-so_df <- so@meta.data %>%
-  as_tibble(rownames = "cell_id")
-
-# Load LEC object
-so_lec <- read_rds(here(so_dir, "so_lec.rds"))
-
-so_lec_df <- so_lec@meta.data %>%
-  as_tibble(rownames = "cell_id")
-
-# Load FRC object
-so_fib <- read_rds(here(so_dir, "so_fib.rds"))
-
-so_fib_df <- so_fib@meta.data %>%
-  as_tibble(rownames = "cell_id")
-
-# Load raw meta.data
-so_raw_df <- read_tsv(here(so_dir, "so_raw.tsv.gz"))
-
-# Load enriched meta.data
-so_enr_df <- read_tsv(here(so_dir, "so_enr.tsv.gz"))
-
-```
-
-```{r "sample labels"}
-
-# Sample levels
-n_rep <- n_distinct(so$rep)
-
-tms <- c(params$tm, names(params$other_tms)) %>%
-  unique()
-
-sam_lvls <- so_raw_df %>%
-  mutate(
-    treatment = fct_relevel(treatment, unique(treats)),
-    tm        = fct_relevel(tm, tms)
-  ) %>%
-  arrange(treatment, tm) %>%
-  select(tm, sample, orig.ident) %>%
-  distinct()
-
-sam_lvls <- set_names(sam_lvls$sample, sam_lvls$orig.ident)
-
+# Set levels
+sam_lvls <- unique(so_24$orig.ident)
+treats   <- unique(so_24$treatment)
 ```

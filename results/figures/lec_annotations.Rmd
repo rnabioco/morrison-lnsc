@@ -14,9 +14,9 @@ params:
   template_dir: "src"
   so_dir:       "~/Dropbox/Ryan/Projects/morrison-lnsc/results/sobjs"
   orig_so_dir:  "~/Dropbox/Ryan/Projects/morrison-scRNA-seq/results"
-  type_res:     5                         # Clustering resolution for annotating cell types
+  type_res:     10                        # Clustering resolution for annotating cell types
   lec_res:      5                         # Clustering resolution for annotating LECs
-  fib_res:      5                         # Clustering resolution for annotating fibroblasts/stromal cells
+  fib_res:      3                         # Clustering resolution for annotating fibroblasts/stromal cells
 editor_options: 
   chunk_output_type: console
 ---
@@ -1299,6 +1299,15 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
 ```
 
 ```{r "references"}
+# Immgen reference
+ref_immgen_new <- ref_fib[, "PvC", drop = FALSE]
+ref_immgen_new <- ref_immgen_new[rownames(ref_immgen_new) %in% rownames(ref_immgen), , drop = FALSE]
+ref_immgen     <- ref_immgen[rownames(ref_immgen_new), ]
+
+stopifnot(identical(rownames(ref_immgen), rownames(ref_immgen_new)))
+
+ref_immgen_new <- cbind(ref_immgen, ref_immgen_new)
+
 # LEC reference
 ref_lec <- ref_immgen[, grepl("^Endothelial cells", colnames(ref_immgen))]
 ref_lec <- ref_lec[rownames(ref_lec) %in% rownames(ref_LEC_xiang), ]
@@ -1308,9 +1317,7 @@ colnames(ref_lec) <- colnames(ref_lec) %>%
 
 ref_LEC_xiang <- ref_LEC_xiang[rownames(ref_lec), ]
 
-if (!identical(rownames(ref_LEC_xiang), rownames(ref_lec))) {
-  stop("LEC reference rownames do not match.")
-}
+stopifnot(identical(rownames(ref_LEC_xiang), rownames(ref_lec)))
 
 ref_lec <- cbind(ref_LEC_xiang, ref_lec)
 ref_lec <- ref_lec[, !grepl("^Endothelial cells", colnames(ref_lec))]
@@ -1321,12 +1328,157 @@ ref_fib <- ref_fib[rownames(ref_fib) %in% rownames(ref_lymphnodestromal), ]
 
 ref_lymphnodestromal <- ref_lymphnodestromal[rownames(ref_fib), ]
 
-if (!identical(rownames(ref_lymphnodestromal), rownames(ref_fib))) {
-  stop("Fibroblast/stromal reference rownames do not match.")
-}
+stopifnot(identical(rownames(ref_lymphnodestromal), rownames(ref_fib)))
 
 ref_fib <- cbind(ref_lymphnodestromal, ref_fib)
 ```
+
+```{r "broad cell types"}
+# Merge 8 and 24 hpi objects
+so_8  <- qread(so_8_dir)
+so_24 <- qread(so_24_dir)
+
+so_merge <- merge(so_8, so_24) %>%
+  FindVariableFeatures(nfeatures = 2000) %>%
+  ScaleData() %>%
+  RunPCA() %>%
+  RunUMAP(dims = 1:40)
+  
+# Integrate samples
+so_merge <- so_merge %>%
+  mutate_meta(
+    mutate,
+    integration_var = ifelse(
+      tm == "24hpi" & treatment == "CHIKV",
+      "chikv_24hpi", "other"
+    )
+  ) %>%
+  RunHarmony(
+    c("rep", "integration_var"),
+    dims = 1:40, plot_convergence = TRUE
+  ) %>%
+  RunUMAP(
+    dims = 1:40,
+    reduction      = "harmony",
+    reduction.name = "humap",
+    reduction.key  = "hUMAP_"
+  ) %>%
+  FindNeighbors(reduction = "harmony", dims = 1:40) %>%
+  FindClusters(resolution = 5:10)
+
+# Classify broad cell types
+# Manually classified B cells and T cells
+type_clst <- str_c("RNA_snn_res.", params$type_res)
+
+b_genes <- list("B cells" = "Cd19")
+t_genes <- list("T cells" = "Cd3e")
+
+so_merge <- so_merge %>%
+  mutate_meta(dplyr::select, -c(UMAP_1, UMAP_2)) %>%
+  clustify(
+    ref_mat     = ref_immgen,
+    cluster_col = type_clst,
+    threshold   = 0.6,
+    n_genes     = 2000,
+    rename_prefix = "rough"
+  ) %>%
+  classify_mod_score(    # B cells
+    feats    = b_genes,
+    prefix   = "b",
+    cutoff   = 0.2,
+    clst_col = type_clst,
+    type_col = "rough_type"
+  ) %>%
+  classify_mod_score(    # T cells
+    feats    = t_genes,
+    prefix   = "t",
+    cutoff   = 0.5,
+    clst_col = type_clst,
+    type_col = "rough_type"
+  )
+
+# Manually adjust some clusters based on Pdpn and Pecam1 expression
+# Set 30, 34, 91, 99, 114, 147, as FRCs
+frc_clsts <- c(30, 34, 91, 99, 114, 147)
+
+so_merge <- so_merge %>%
+  mutate_meta(
+    mutate,
+    rough_type = ifelse(
+      !!sym(type_clst) %in% frc_clsts,
+      "Fibroblasts", rough_type
+    )
+  )
+
+so_merge <- so_merge %>%
+  mutate_meta(
+    mutate,
+    cell_type = str_remove(rough_type, " \\(.+$"),
+  )
+```
+
+```{r "fibroblast subsets"}
+# Recluster fibroblasts and annotate PvCs
+so_fib <- so_merge %>%
+  subset(cell_type %in% fib_cell_types) %>%
+  FindVariableFeatures(nfeatures = 2000) %>%
+  ScaleData() %>%
+  RunPCA() %>%
+  RunUMAP(dims = 1:40)
+  
+so_fib <- so_fib %>%
+  mutate_meta(
+    mutate,
+    integration_var = ifelse(
+      tm == "24hpi" & treatment == "CHIKV",
+      "chikv_24hpi", "other"
+    )
+  ) %>%
+  RunHarmony(
+    c("rep", "integration_var"),
+    dims = 1:40, plot_convergence = TRUE
+  ) %>%
+  RunUMAP(
+    dims = 1:40,
+    reduction      = "harmony",
+    reduction.name = "humap",
+    reduction.key  = "hUMAP_"
+  ) %>%
+  FindNeighbors(reduction = "harmony", dims = 1:40) %>%
+  FindClusters(resolution = 1:5)
+
+# Set PvCs
+# Integration is not great for Cxcl9+ TRCs
+# Works good for PvCs
+fib_clst <- str_c("RNA_snn_res.", params$fib_res)
+
+so_fib <- so_fib %>%
+  mutate_meta(dplyr::select, -starts_with("UMAP_"), -fib_type) %>%
+  clustify(
+    ref_mat       = ref_fib,
+    cluster_col   = fib_clst,
+    rename_prefix = "fib",
+    n_genes       = 2000,
+    threshold     = 0.65
+  ) %>%
+  mutate_meta(
+    mutate,
+    cell_type = ifelse(fib_type == "Pvc", fib_type, "FRC")
+  )
+
+so_merge <- so_merge %>%
+  AddMetaData(FetchData(so_fib, "fib_type")) %>%
+  mutate_meta(
+    mutate,
+    cell_type = case_when(
+      fib_type == "PvC" & !is.na(fib_type) ~ fib_type,
+      !is.na(fib_type)                     ~ "FRC",
+      TRUE                                 ~ cell_type
+    )
+  )
+```
+
+
 
 ```{r "prepare objects"}
 # Create new merged LEC object
@@ -1611,10 +1763,8 @@ marco_expr <- c(Marco_LEC = "\"Marco\"^\"+\"*\" LEC\"")
 # * integrate replicates and integrate 24hpi CHIKV sample with all other samples
 # * key issue with past attempts to perform integrated analysis is that
 #   integration does not work well when BECs are excluded
-so_lec <- list(`8hpi` = so_8, `24hpi` = so_24) %>%
-  map(subset, cell_type %in% lec_cell_types)
-
-so_lec_merge <- merge(so_lec[[1]], so_lec[-1]) %>%
+so_lec_merge <- so_merge %>%
+  subset(cell_type %in% lec_cell_types) %>%
   mutate_meta(
     mutate,
     integration_var = ifelse(
@@ -1679,9 +1829,10 @@ so_lec_merge <- so_lec_merge %>%
   FindNeighbors(reduction = "harmony", dims = 1:40) %>%
   FindClusters(resolution = resolutions)
 
-so_mock <- so_lec_merge %>%
-  mutate_meta(dplyr::select, -any_of(c("type", "r", "UMAP_1", "UMAP_2"))) %>%
-  subset(treatment == "mock")
+# # To only use mock expression for annotations
+# so_mock <- so_lec_merge %>%
+#   mutate_meta(dplyr::select, -any_of(c("type", "r", "UMAP_1", "UMAP_2"))) %>%
+#   subset(treatment == "mock")
 
 # Annotate LEC subsets for each set of parameters
 # return data.frame with summary stats for each
@@ -1861,28 +2012,33 @@ ann_clst_res <- tibble(
   separate(key, into = c("blank", "rsln", "n_genes"), sep = "-") %>%
   dplyr::select(-blank) %>%
   group_by(id) %>%
+  mutate(n = n()) %>%
   dplyr::slice(1) %>%
-  ungroup()
+  ungroup() %>%
+  arrange(desc(n)) %>%
+  mutate(id = row_number())
 ```
 
 ```{r "refine consensus annotations"}
-# Use clustifyr params identified above
-# 2000 genes, resolution 11
-clst <- "RNA_snn_res.11"
-
-if (create_obj) {
-  so_lec_merge <- so_lec_merge %>%
-    clustify(
-      ref_mat     = ref_lec,
-      cluster_col = clst,
-      n_genes     = 2000,
-      threshold   = 0.55,
-      compute_method    = "spearman",
-      pseudobulk_method = "mean"
-    )
-}
+# # Use clustifyr params identified above
+# # 2000 genes, resolution 11
+# clst <- "RNA_snn_res.11"
+# 
+# if (create_obj) {
+#   so_lec_merge <- so_lec_merge %>%
+#     clustify(
+#       ref_mat     = ref_lec,
+#       cluster_col = clst,
+#       n_genes     = 2000,
+#       threshold   = 0.6,
+#       compute_method    = "spearman",
+#       pseudobulk_method = "mean"
+#     )
+# }
 
 # Adjust clusters based on Marco expression
+clst <- "RNA_snn_res.11"
+
 top_marco <- so_lec_merge %>%
   FetchData(c("Marco", "tm", "treatment", clst)) %>%
   group_by(!!sym(clst)) %>%
@@ -1902,6 +2058,24 @@ if (create_obj) {
     qsave(here(params$so_dir, "so_lec_annotations_2.qs"))
 }
 
+# Adjust unassigned clusters based on Pdpn and Pecam1 expression
+other_becs <- so_lec_merge %>%
+  subset(top_type == "unassigned") %>%
+  FetchData(c("Pdpn", "Pecam1", "Cd34", "tm", "treatment", clst)) %>%
+  group_by(!!sym(clst)) %>%
+  summarize(across(c(Pdpn, Pecam1, Cd34), mean), .groups = "drop") %>%
+  filter(Pdpn < 0.1, Pecam1 > 0.5) %>%
+  pull(clst) %>%
+  as.character()
+
+so_lec_merge %>%
+  plot_scatter(
+    clst, top = other_becs,
+    size = 0.001,
+    plot_colors = c(other = "grey85")
+  ) +
+  facet_grid(tm ~ treatment)
+
 # so_lec_merge %>%
 #   plot_violin(
 #     "Marco",
@@ -1914,25 +2088,38 @@ if (create_obj) {
 
 ```{r "PLOT DIFFERENT ANNOTATIONS", eval = FALSE}
 # Filter results
-test_res <- param_results %>%
-  # filter(n_genes == 1000, obj == "all") %>%    # 18 is closest to consensus
-  # filter(n_genes == 2000, obj == "all") %>%    # 17 is closest to consensus
+test_res <- ann_clst_res %>%
+  pmap_dfr(~ {
+    args <- list(...)
+    
+    cluster_param_results %>%
+      filter(
+        rsln    == args$rsln,
+        n_genes == args$n_genes,
+        obj     == args$type
+      ) %>%
+      distinct(n_genes, obj, rsln, .keep_all = TRUE) %>%
+      mutate(ttl = str_c(args$id, rsln, n_genes, obj, n_genes, sep = "-"))
+  })
   
-  filter(n_genes == 1500, rsln == "RNA_snn_res.9.5", obj == "all") %>%      # cluster 7
-  # filter(n_genes == 2000, rsln == "RNA_snn_res.9", obj == "all") %>%      # cluster 9
-  
-  distinct(n_genes, obj, rsln, .keep_all = TRUE)
-
-  # filter(rsln == "RNA_snn_res.15") %>%
-  # group_by(rsln, n_genes, obj) %>%
-  # filter(
-  #   # (Marco_mn == "Marco_LEC" | Marco_med == "Marco_LEC"),
-  #   # all(Marco_mn[treatment == "mock"] == "Marco_LEC" | is.na(Marco_mn[treatment == "mock"])),
-  #   all(Madcam1_mn == "fLEC" | is.na(Madcam1_mn)),
-  #   type == "Marco_LEC",
-  #   n_chikv > 200
-  # ) %>%
-  # ungroup()
+  # # filter(n_genes == 1000, obj == "all") %>%    # 18 is closest to consensus
+  # # filter(n_genes == 2000, obj == "all") %>%    # 17 is closest to consensus
+  # 
+  # filter(n_genes == 1500, rsln == "RNA_snn_res.9.5", obj == "all") %>%      # cluster 7
+  # # filter(n_genes == 2000, rsln == "RNA_snn_res.9", obj == "all") %>%      # cluster 9
+  # 
+  # distinct(n_genes, obj, rsln, .keep_all = TRUE)
+  # 
+  # # filter(rsln == "RNA_snn_res.15") %>%
+  # # group_by(rsln, n_genes, obj) %>%
+  # # filter(
+  # #   # (Marco_mn == "Marco_LEC" | Marco_med == "Marco_LEC"),
+  # #   # all(Marco_mn[treatment == "mock"] == "Marco_LEC" | is.na(Marco_mn[treatment == "mock"])),
+  # #   all(Madcam1_mn == "fLEC" | is.na(Madcam1_mn)),
+  # #   type == "Marco_LEC",
+  # #   n_chikv > 200
+  # # ) %>%
+  # # ungroup()
 
 # Example plots
 # plot selected examples
@@ -1951,7 +2138,8 @@ test_plts <- test_res %>%
         "type", size = 0.5,
         plot_colors = c(Marco_LEC = "red", fLEC = "black")
       ) +
-      facet_grid(tm ~ treatment)
+      facet_grid(tm ~ treatment) +
+      ggtitle(args$ttl)
     
     bx1 <- so_ann %>%
       plot_violin(
@@ -2023,6 +2211,101 @@ so_merge %>%
 #     size = 0.1
 #   ) +
 #   facet_grid(tm ~ treatment)
+
+# Annotate broad cell types
+so_merge <- qread(file.path(params$so_dir, "so_merge_int.qs"))
+
+so_merge <- so_merge %>%
+  FindNeighbors(reduction = "harmony", dims = 1:40) %>%
+  FindClusters(resolution = 5:10)
+
+so_merge <- so_merge %>%
+  mutate_meta(dplyr::select, -starts_with("UMAP_"), -c(type, r)) %>%
+  clustify(
+    # ref_mat = ref_immgen_new,
+    ref_mat = ref_immgen,
+    cluster_col = "RNA_snn_res.10",
+    n_genes = 2000,
+    threshold = 0.6
+  )
+
+# Recluster fibroblasts and annotate PvCs
+fib_bcs <- so_merge@meta.data %>%
+  filter(grepl("^Stromal cells|^Fibroblasts", type)) %>%
+  rownames()
+
+so_fib <- so_merge %>%
+  subset(cells = fib_bcs) %>%
+  FindVariableFeatures(nfeatures = 2000) %>%
+  ScaleData() %>%
+  RunPCA() %>%
+  RunUMAP(dims = 1:40)
+  
+so_fib <- so_fib %>%
+  mutate_meta(
+    mutate,
+    integration_var = ifelse(
+      tm == "24hpi" & treatment == "CHIKV",
+      "chikv_24hpi", "other"
+    )
+  ) %>%
+  RunHarmony(
+    c("rep", "integration_var"),
+    dims = 1:40, plot_convergence = TRUE
+  ) %>%
+  RunUMAP(
+    dims = 1:40,
+    reduction      = "harmony",
+    reduction.name = "humap",
+    reduction.key  = "hUMAP_"
+  ) %>%
+  FindNeighbors(reduction = "harmony", dims = 1:40) %>%
+  FindClusters(resolution = 1:5)
+
+# Set PvCs
+# Integration is not great for Cxcl9+ TRCs
+# Works good for PvCs
+so_fib <- so_fib %>%
+  mutate_meta(dplyr::select, -starts_with("UMAP_"), -c(type, r)) %>%
+  clustify(
+    ref_mat     = ref_fib,
+    cluster_col = "RNA_snn_res.3",
+    n_genes     = 2000,
+    threshold   = 0.65
+  )
+
+so_merge <- so_merge %>%
+  AddMetaData(FetchData(so_fib, "type"), col.name = "fib_type") %>%
+  mutate_meta(
+    mutate,
+    new_cell_type = ifelse(fib_type == "PvC" & !is.na(fib_type), fib_type, type)
+  )
+
+# Check cell type annotations
+so_merge %>%
+  plot_scatter(
+    # "new_cell_type",
+    "fib_type",
+    "hUMAP_1", "hUMAP_2",
+    size = 0.001
+  ) +
+  facet_grid(tm ~ treatment)
+
+so_merge %>%
+  plot_scatter(
+    "r",
+    "hUMAP_1", "hUMAP_2",
+    size = 0.001, plot_colors = c("lightblue", "red")
+  ) +
+  facet_grid(tm ~ treatment)
+
+so_merge %>%
+  plot_scatter(
+    "Pdpn",
+    "hUMAP_1", "hUMAP_2",
+    size = 0.001, plot_colors = c("lightblue", "red")
+  ) +
+  facet_grid(tm ~ treatment)
 ```
 
 <br>
