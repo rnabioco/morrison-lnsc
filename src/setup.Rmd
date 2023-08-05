@@ -1,4 +1,14 @@
 
+```{r "setup chunk opts", echo = FALSE}
+# Default chunk options
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE,
+  echo    = FALSE,
+  dpi     = 500
+)
+```
+
 ```{r "packages"}
 # plotting
 library(scales)
@@ -180,7 +190,7 @@ create_cor_heatmap <- function(df_in, ttl, lec_labs = NULL, ln_clr = fade_0) {
 }
 
 create_gene_boxplot <- function(input, GENE, TYPE, clr = lec_type_cols[[TYPE]],
-                                pval_y = 5) {
+                                pval_y = 5, use_adj_p = TRUE) {
   
   # Format plot data
   dat <- input %>%
@@ -235,13 +245,16 @@ create_gene_boxplot <- function(input, GENE, TYPE, clr = lec_type_cols[[TYPE]],
     )
   
   # Add p-values to plot
+  if (use_adj_p) p_clmn <- "p_adj"
+  else           p_clmn <- "p.value"
+  
   comps %>%
     pwalk(~ {
       v_args <- list(...)[c("x", "xend")]
       
       p <- p_vals %>%
         filter(`Cell type 1` %in% v_args & `Cell type 2` %in% v_args) %>%
-        pull(p_adj)
+        pull(p_clmn)
       
       res <<- res %>%
         add_pvals(
@@ -568,7 +581,7 @@ get_degs <- function(so_in, ident_1 = "CHIKV", ident_2 = "mock",
   so_in <- so_in %>%
     mutate_meta(mutate, treat_rep = str_c(!!sym(treat_clmn), !!sym(rep_clmn)))
   
-  typs <- get_cell_types(so_in, "subtype", "treat_rep")
+  typs <- get_cell_types(so_in, type_clmn, "treat_rep")
   typs <- typs[!typs %in% exclude_types]
   
   if (!is.null(file) && file.exists(file)) {
@@ -580,7 +593,7 @@ get_degs <- function(so_in, ident_1 = "CHIKV", ident_2 = "mock",
   degs <- typs %>%
     map_dfr(~ {
       so_in %>%
-        subset(subtype == .x) %>%
+        subset(!!sym(type_clmn) == .x) %>%
         FindConservedMarkers(
           ident.1         = ident_1,
           ident.2         = ident_2,
@@ -588,7 +601,7 @@ get_degs <- function(so_in, ident_1 = "CHIKV", ident_2 = "mock",
           logfc.threshold = min(abs(log_fc)),
           min.cells.group = 3
         ) %>%
-        mutate(subtype = .x) %>%
+        mutate(!!sym(type_clmn) := .x) %>%
         as_tibble(rownames = "gene")
     })
   
@@ -846,21 +859,27 @@ get_clusters <- function(go_in, k = 3, pval = 0.05, qval = 0.2, n_overlap = 3,
 #' @param clrs Colors to use for each cluster
 #' @param n_col Number of columns to use for organizing facets (each cluster is
 #' plotted as a separate facet)
+#' @param clusters Which clusters to plot, this overrides n_clusters
 #' @param cluster_labels Vector containing descriptive labels for each cluster
 create_go_heatmap <- function(df_in, go_in, n_clusters = 2, n_terms = 5,
                               pval = 0.05, qval = 0.2, n_overlap = 3, n_genes = 3,
                               clrs = c("orange", "lightblue", "red"), n_col = 1,
-                              include_overall_score = FALSE, free_y = FALSE,
-                              cluster_labels = NULL) {
+                              clusters = NULL, include_overall_score = FALSE,
+                              free_y = FALSE, cluster_labels = NULL) {
   
   # Top GO terms to plot
   # df_in includes combined GO terms identified across all cell types
   # sort to show shared terms at the top, sort by mean adjusted p-value for term
-  top_clusters <- df_in$cluster %>%
-    table() %>%
-    sort(decreasing = TRUE) %>%
-    head(n_clusters) %>%
-    names()
+  if (!is.null(clusters)) {
+    top_clusters <- clusters
+    
+  } else {
+    top_clusters <- df_in$cluster %>%
+      table() %>%
+      sort(decreasing = TRUE) %>%
+      head(n_clusters) %>%
+      names()
+  }
   
   n_seq <- seq_len(n_terms)
   
@@ -1237,7 +1256,7 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
       linewidth = 0.75,
       data  = ln_dat
     ) +
-    facet_grid(as.formula(str_c("name ~ ", typ_clmn)), switch = "y", scales = "free_y") +
+    facet_grid(as.formula(str_c("name ~ ", type_clmn)), switch = "y", scales = "free_y") +
     
     scale_linetype_manual(values = c("TRUE" = 1, "FALSE" = 3)) +
     scale_color_manual(values = clrs) +
@@ -1265,8 +1284,11 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
 }
 ```
 
-```{r "check for objects", echo = FALSE}
+```{r "setup parameters"}
 create_obj <- !file.exists(here(params$so_dir, "so_merge.qs"))
+
+fib_cell_types <- c("Fibroblasts", "Stromal cells", "Stromal cells (DN)")
+lec_cell_types <- "Endothelial cells"
 ```
 
 ```{r "references"}
@@ -1400,8 +1422,6 @@ so_merge <- so_merge %>%
 
 ```{r "fibroblast subsets", eval = create_obj}
 # Recluster fibroblasts and annotate PvCs
-fib_cell_types <- c("Fibroblasts", "Stromal cells", "Stromal cells (DN)")
-
 so_frc <- so_merge %>%
   subset(cell_type %in% fib_cell_types) %>%
   FindVariableFeatures(nfeatures = 2000) %>%
@@ -1474,8 +1494,6 @@ so_merge <- so_merge %>%
 # * integrate replicates and integrate 24hpi CHIKV sample with all other samples
 # * key issue with past attempts to perform integrated analysis is that
 #   integration does not work well when BECs are excluded
-lec_cell_types <- "Endothelial cells"
-
 so_lec <- so_merge %>%
   subset(cell_type %in% lec_cell_types) %>%
   FindVariableFeatures(nfeatures = 2000) %>%
@@ -1734,13 +1752,14 @@ ann_clst_res <- tibble(
 
 ```{r "lec refined annotations", eval = create_obj}
 # Adjust clusters based on Marco expression
-lec_clst <- str_c("RNA_snn_res.", params$lec_res)
+# lec_clst <- str_c("RNA_snn_res.", params$lec_res)
+lec_clst <- str_c("RNA_snn_res.", 4)
 
 so_lec <- so_lec %>%
   mutate_meta(mutate, lec_subtype = top_type) %>%
   classify_markers(
     feats    = "Marco",
-    filt     = Marco > 0.5,
+    filt     = Marco > 0.6,
     type     = "Marco_LEC",
     clst_col = lec_clst,
     type_col = "lec_subtype"
@@ -1786,7 +1805,7 @@ save_objs(so_24,    ob_dir = params$so_dir)
 ```
 
 ```{r "load objects"}
-# so_merge <- qread(file.path(params$so_dir, "so_merge.qs"))
+so_merge <- qread(file.path(params$so_dir, "so_merge.qs"))
 so_lec   <- qread(file.path(params$so_dir, "so_lec.qs"))
 so_8     <- qread(file.path(params$so_dir, "so_8.qs"))
 so_24    <- qread(file.path(params$so_dir, "so_24.qs"))
@@ -1892,13 +1911,14 @@ subtype_cols["unassigned"] <- "#999999"
 subtype_cols["other"]      <- fade_0
 subtype_cols["CD34+ SC"]   <- "#534379"
 
-lec_type_cols <- c(subtype_cols, type_cols[names(type_cols) != "unassigned"])
-lec_type_cols["CHIKV-low"]      <- "white"
-lec_type_cols["T cells"]        <- "black"
-lec_type_cols["B cells"]        <- "#875C04"
-lec_type_cols["FRC"]            <- "#00375B"
-lec_type_cols["PvC"]            <- "#065D43"
-lec_type_cols["unassigned-LEC"] <- "#676767"
+# lec_type_cols <- c(subtype_cols, type_cols[names(type_cols) != "unassigned"])
+# lec_type_cols["CHIKV-low"]      <- "white"
+# lec_type_cols["T cells"]        <- "black"
+# lec_type_cols["B cells"]        <- "#875C04"
+# lec_type_cols["FRC"]            <- "#00375B"
+# lec_type_cols["PvC"]            <- "#065D43"
+# lec_type_cols["unassigned-LEC"] <- "#676767"
+# lec_type_cols["other"]          <- "grey70"
 
 
 lec_type_cols <- so_24$lec_type %>%
@@ -1914,6 +1934,7 @@ lec_type_cols <- set_names(
 )
 
 lec_type_cols["unassigned"] <- "grey70"
+lec_type_cols["other"]      <- "grey50"
 
 old_cols <- lec_type_cols
 

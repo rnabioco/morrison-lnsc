@@ -16,6 +16,8 @@ params:
   type_res:     10                        # Clustering resolution for annotating cell types
   lec_res:      10                        # Clustering resolution for annotating LECs
   frc_res:      3                         # Clustering resolution for annotating fibroblasts
+editor_options: 
+  chunk_output_type: console
 ---
 
 <br>
@@ -78,26 +80,31 @@ A <- dat %>%
 
 ```{r "CHIKV-high cell types", fig.width = 10, fig.height = 10}
 # Format plot data
-dat <- so_8@meta.data %>%
-  filter(chikv_grp == chikv_grps[2])
+# ONLY SHOW CELLS WITH >3 CHIKV-HIGH CELLS
+chikv_pos_dat <- so_8@meta.data %>%
+  filter(chikv_grp == chikv_grps[2]) %>%
+  group_by(lec_type) %>%
+  mutate(lec_type = ifelse(n() > 3, lec_type, "other")) %>%
+  ungroup()
 
-plt_labs <- get_nlab_fun(dat, "lec_type", l = "\n", r = "")
+plt_labs <- get_nlab_fun(chikv_pos_dat, "lec_type", l = "\n", r = "")
 plt_labs <- plt_labs()
 plt_labs <- map_chr(plt_labs, type_lab_fn)
+plt_labs <- plt_labs[c(names(plt_labs)[names(plt_labs) != "other"], "other")]
 
-dat <- dat %>%
+chikv_pos_dat <- chikv_pos_dat %>%
   mutate(lec_type = fct_relevel(lec_type, names(plt_labs)))
 
 # Create UMAP
 chikv_typs_u <- so_8@meta.data %>%
-  mutate(lec_type = fct_relevel(lec_type, names(plt_labs))) %>%
+  # mutate(lec_type = fct_relevel(lec_type, names(plt_labs))) %>%
   ggplot(aes(UMAP_1, UMAP_2)) +
   geom_point_trace(
     color = "grey",
     fill  = "white",
     trace_position = "bottom"
   ) +
-  geom_point(aes(color = lec_type), data = dat) +
+  geom_point(aes(color = lec_type), data = chikv_pos_dat) +
   scale_color_manual(values = lec_type_cols, labels = plt_labs) +
   scale_y_discrete(labels = type_lab_fn) +
   guides(color = guide_legend(override.aes = list(size = 4))) +
@@ -118,49 +125,48 @@ chikv_typs_u <- so_8@meta.data %>%
 # ONLY PLOTTING ENRICHED COUNTS
 dat <- so_8@meta.data %>%
   as_tibble(rownames = ".cell_id") %>%
-  filter(treatment == "CHIKV") %>%
-  group_by(lec_type) %>%
-  filter(n() > 50) %>%
-  ungroup() %>%
-  mutate(
-    counts = tot_nCount_CHIKV - nCount_CHIKV
-    # counts = tot_nCount_CHIKV
-    # enr = tot_nCount_CHIKV + 1
-  )
+  filter(treatment == "CHIKV")
 
 # Fraction CHIKV-high cells
+# top cell types with >40 total cells, >3 CHIKV+ cells
 frac_dat <- dat %>%
-  group_by(lec_type, rep) %>%
+  group_by(lec_type) %>%
   summarize(
-    n = length(chikv_grp[chikv_grp == chikv_grps[2]]),
-    tot = n(),
+    n    = length(chikv_grp[chikv_grp == chikv_grps[2]]),
+    tot  = n(),
     frac = n / tot,
     .groups = "drop"
   ) %>%
   group_by(lec_type) %>%
-  mutate(tot = sum(tot)) %>%
+  mutate(
+    tot      = sum(tot),
+    tot_frac = sum(n) / tot,
+    n_lab    = label_comma()(tot),
+    n_lab    = str_c(lec_type, "\nn = ", n, "/", n_lab),
+    n_lab    = str_replace(n_lab, "_", " ")
+  ) %>%
   ungroup() %>%
-  mutate(lec_type = fct_reorder(lec_type, frac, max, .desc = TRUE))
+  filter(tot > 40, n > 3) %>%
+  mutate(lec_type = fct_reorder(lec_type, tot_frac, max, .desc = TRUE))
 
 frac_lvls <- levels(frac_dat$lec_type)
 
-n_lab <- get_nlab_fun(dat, "lec_type", l = "\n", r = "")
-
-n_lab <- n_lab() %>%
-  map_chr(str_replace, "_", " ")
+n_lab <- set_names(frac_dat$n_lab, frac_dat$lec_type)
 
 frac_8 <- frac_dat %>%
-  ggplot(aes(lec_type, frac, fill = lec_type, color = lec_type, alpha = rep)) +
-  geom_col(position = position_dodge2(padding = 0.12), width = 0.8, size = 1) +
-  scale_alpha_manual(values = c(0.3, 0.7)) +
+  filter(lec_type %in% frac_lvls) %>%
+  ggplot(aes(lec_type, tot_frac, fill = lec_type, color = lec_type)) +
+  geom_col(
+    width = 0.55, size = 1, alpha = 0.5,
+    position = position_dodge2(padding = 0.12)
+  ) +
   scale_fill_manual(values = lec_type_cols) +
   scale_color_manual(values = lec_type_cols) +
   scale_x_discrete(labels = n_lab) +
+  scale_y_continuous(breaks = c(0, 0.1, 0.2)) +
   labs(y = "Fraction\nCHIKV+ cells") +
   base_theme +
   theme(
-    # aspect.ratio = 0.2
-    # plot.margin = margin(25, 5, 5, 15)
     axis.text.y = element_text(size = txt_pt1),
     axis.text.x = element_text(size = ttl_pt2, angle = 45, hjust = 1),
     axis.title.x = element_blank(),
@@ -168,25 +174,26 @@ frac_8 <- frac_dat %>%
   )
 ```
 
-```{r "fig 1B", fig.width = 10, fig.height = 5}
+```{r "8hpi CHIKV counts boxes", fig.width = 10, fig.height = 5}
 # Create boxplots
+# Only plot CHIKV-high cells for cell types shown in bargraphs
 count_bxs <- dat %>%
+  filter(chikv_grp == "CHIKV-high", lec_type %in% frac_lvls) %>%
   mutate(lec_type = fct_relevel(lec_type, frac_lvls)) %>%
-  ggplot(
-    aes(lec_type, counts + 1, fill = lec_type, color = lec_type, alpha = rep)
+  ggplot(aes(lec_type, tot_pct_CHIKV, fill = lec_type, color = lec_type)) +
+  geom_boxplot(
+    size = 1, outlier.size = 1.5, outlier.alpha = 1,
+    alpha = 0.5, width = 0.55,
+    position = position_dodge2(padding = 0.12)
   ) +
-  geom_boxplot(size = 1, outlier.size = 1.5, outlier.alpha = 1, position = position_dodge2(padding = 0.12), width = 0.8) +
-  scale_y_log10() +
-  scale_x_discrete(labels = plt_labs)+
+  scale_x_discrete(labels = plt_labs) +
+  scale_y_continuous(expand = expansion(c(0.05, 0.2)), trans = "log10") +
   scale_fill_manual(values = lec_type_cols) +
   scale_color_manual(values = lec_type_cols) +
-  scale_alpha_manual(values = c(0.3, 0.7)) +
-  labs(y = "CHIKV\ncounts + 1") +
+  labs(y = "% CHIKV counts") +
   base_theme +
   theme(
-    # axis.text.x     = element_text(size = ttl_pt2, angle = 90, vjust = 0.5, hjust = 1)
-    # aspect.ratio = 0.2,
-    plot.margin     = margin(35, 5, 5, 25),
+    plot.margin     = margin(5, 5, 5, 35),
     legend.position = "none",
     axis.title.x    = element_blank(),
     axis.title.y    = element_text(size = ttl_pt2),
@@ -201,6 +208,36 @@ count_bxs <- plot_grid(
   ncol = 1,
   rel_heights = c(1, 1)
 )
+
+
+
+# # CALCULATE P-VALUES
+# x <- dat %>%
+#   filter(chikv_grp == "CHIKV-high")
+# 
+# typs <- table(x$lec_type)
+# typs <- names(typs[typs > 2])
+# 
+# typs %>%
+#   set_names() %>%
+#   map_dfr(~ {
+#     x <- x %>%
+#       mutate(lec_type = ifelse(lec_type == .x, lec_type, "other")) %>%
+#       split(.$lec_type)
+# 
+#     x <- x[c(.x, "other")]
+#     
+#     typ_dat <- x[[1]]$tot_pct_CHIKV
+#     oth_dat <- x[[2]]$tot_pct_CHIKV
+# 
+#     p <- wilcox.test(typ_dat, oth_dat, alternative = "g")
+#     p <- tidy(p)
+# 
+#     p %>%
+#       mutate(type = .x, n = length(typ_dat), mean = mean(typ_dat), sd = sd(typ_dat))
+#   }) %>%
+#   arrange(p.value) %>%
+#   mutate(p_adj = p.adjust(p.value, method = "bonferroni"))
 ```
 
 ```{r "fig1 examples", fig.width = 3, fig.height = 5}
@@ -216,6 +253,9 @@ plt_dat <- so_8 %>%
 
 marco_bxs <- plt_dat %>%
   create_gene_boxplot("Marco", "fLEC", clr = "#D7301F")
+
+marco_bxs_2 <- plt_dat %>%
+  create_gene_boxplot("Marco", "Marco_LEC", clr = "#D7301F")
 
 madcam_bxs <- plt_dat %>%
   create_gene_boxplot("Madcam1", "fLEC", clr = "#E69F00")
@@ -265,10 +305,14 @@ top <- plot_grid(
 )
 
 bot <- plot_grid(
-  count_bxs, NULL, marco_bxs, NULL, madcam_bxs,
-  labels = c("", "", "E", "", "F"), label_size = ttl_pt2 * 1.5,
+  # count_bxs, NULL, marco_bxs, NULL, marco_bxs_2, NULL, madcam_bxs, NULL,
+  # labels = c("", "", "E", "", "", "", "F"),
+  # rel_widths = c(0.8, 0.05, 0.36, 0.05, 0.36, 0.05, 0.36, 0.5)
+  count_bxs, NULL, marco_bxs, NULL, madcam_bxs, NULL,
+  labels = c("", "", "E", "", "F"),
+  label_size = ttl_pt2 * 1.5,
   nrow   = 1,
-  rel_widths = c(1, 0.05, 0.36, 0.05, 0.36)
+  rel_widths = c(1.3, 0.05, 0.36, 0.05, 0.36, 0.25)
 )
 
 plot_grid(
@@ -276,24 +320,6 @@ plot_grid(
   ncol = 1,
   rel_heights = c(1, 0.05, 0.7)
 )
-
-# l <- plot_grid(
-#   A, C,
-#   labels = c("A", "C"), label_size = ttl_pt2 * 1.5,
-#   ncol   = 1,
-#   align  = "v",
-#   axis   = "rl"
-# )
-# 
-# r <- plot_grid(
-#   B, D,
-#   labels = c("B", "D"), label_size = ttl_pt2 * 1.5,
-#   ncol   = 1,
-#   align  = "v",
-#   axis   = "rl"
-# )
-# 
-# plot_grid(l, r, nrow = 1, rel_widths = c(1, 0.5))
 ```
 
 <br>
@@ -353,7 +379,7 @@ sgRNA_umap <- dat %>%
   )
 ```
 
-```{r "scatter plots", fig.width = 10, fig.height = 7}
+```{r "scatter plots v1", fig.width = 10, fig.height = 7, eval = FALSE}
 # ONLY PLOT CHIKV-HIGH CELLS
 # Shouldn't include any CHIKV-low cells, since they have been filtered
 # stringently based on QC and CHIKV-high cells have not. This would influence
@@ -450,7 +476,7 @@ scatter <- list(scatter, x_ttl) %>%
   wrap_plots(ncol = 1, heights = c(1, 0.1))
 ```
 
-```{r "scatter plots v2", fig.width = 10, fig.height = 7, eval = FALSE}
+```{r "scatter plots v2", fig.width = 10, fig.height = 7}
 # ONLY PLOT CHIKV-HIGH CELLS
 # Shouldn't include any CHIKV-low cells, since they have been filtered
 # stringently based on QC and CHIKV-high cells have not. This would influence
@@ -538,27 +564,29 @@ scatter <- plt_dat %>%
 scatter <- scatter %>%
   wrap_plots(byrow = FALSE, nrow = 1)
 
-ggsave(
-  here("results/figures/2023-07-04_alt_scatter_plots.pdf"),
-  width = 10, height = 7,
-  dpi = 600, device = "pdf"
-)
-
+# ggsave(
+#   here("results/figures/2023-07-04_alt_scatter_plots.pdf"),
+#   width = 10, height = 7,
+#   dpi = 600, device = "pdf"
+# )
 ```
 
 ```{r "sgRNA signal"}
 # Format plot data
-# only include cell types with >10 cells
+# only include cell types with >40 cells
 plt_dat <- dat %>%
-  filter(treatment == treats[2])
+  filter(treatment == treats[2]) %>%
+  group_by(lec_type) %>%
+  filter(n() > 40) %>%
+  ungroup()
 
-typs <- plt_dat %>%
-  filter(chikv_grp == chikv_grps[2]) %>%
-  pull(lec_type) %>%
-  table() %>%
-  sort(decreasing = TRUE)
-
-typs <- names(typs[typs > 10])
+# typs <- plt_dat %>%
+#   filter(chikv_grp == chikv_grps[2]) %>%
+#   pull(lec_type) %>%
+#   table() %>%
+#   sort(decreasing = TRUE)
+# 
+# typs <- names(typs[typs > 0])
 
 # Fraction CHIKV-high cells
 frac_dat <- plt_dat %>%
@@ -570,19 +598,25 @@ frac_dat <- plt_dat %>%
     .groups = "drop"
   ) %>%
   group_by(lec_type) %>%
-  mutate(tot = sum(tot)) %>%
+  mutate(
+    tot      = sum(tot),
+    tot_frac = sum(n) / tot,
+    n_lab    = label_comma()(tot),
+    n_lab    = str_c(lec_type, "\nn = ", n, "/", n_lab),
+    n_lab    = str_replace(n_lab, "_", " ")
+  ) %>%
+  filter(sum(n) > 3) %>%
   ungroup() %>%
   mutate(lec_type = fct_reorder(lec_type, frac, max, .desc = TRUE))
 
-n_lab <- get_nlab_fun(plt_dat, "lec_type", l = "\n", r = "")
-
-n_lab <- n_lab() %>%
-  map_chr(str_replace, "_", " ")
+n_lab <- set_names(frac_dat$n_lab, frac_dat$lec_type)
 
 frac_24 <- frac_dat %>%
-  ggplot(aes(lec_type, frac, fill = lec_type, color = lec_type, alpha = rep)) +
-  geom_col(position = "dodge") +
-  scale_alpha_manual(values = c(0.1, 0.3, 0.6)) +
+  ggplot(aes(lec_type, frac, fill = lec_type, color = lec_type)) +
+  geom_col(
+    position = position_dodge2(padding = 0.12),
+    alpha = 0.5
+  ) +
   scale_fill_manual(values = lec_type_cols) +
   scale_color_manual(values = lec_type_cols) +
   scale_x_discrete(labels = n_lab) +
@@ -593,18 +627,21 @@ frac_24 <- frac_dat %>%
     axis.text.x = element_text(angle = 45, hjust = 1),
     axis.title.x = element_blank(),
     legend.position = "none",
-    aspect.ratio = 0.2,
+    aspect.ratio = 0.25,
     plot.margin = margin(25, 5, 5, 15)
   )
 
 # sgRNA ratio
 # Filter to include cells with >0 sgRNA counts and >0 5' counts
+# Only include cell types with >40 cells
 sgRNA_boxes <- plt_dat %>%
   filter(
-    lec_type %in% typs,
     CHIKV_sgRNA > 0,
     CHIKV_5 > 0
   ) %>%
+  group_by(lec_type) %>%
+  filter(n() > 40) %>%
+  ungroup() %>%
   plot_violin(
     "CHIKV_sgRNA_fc",
     cluster_col = "lec_type",
@@ -626,7 +663,7 @@ sgRNA_boxes <- plt_dat %>%
   )
 ```
 
-```{r "type examples", fig.width = 10, fig.height = 6.5}
+```{r "type examples", fig.width = 10, fig.height = 6.5, eval = FALSE}
 # Genes to plot
 gns <- c(
   "Lyve1", "Marco",    # Marco LECs
@@ -644,11 +681,11 @@ typ_bx_dat <- list("8hpi" = so_8, "24hpi" = so_24) %>%
   imap_dfr(~ {
     if (identical(.y, "8hpi")) {
       .x <- .x %>%
-        mutate_meta(mutate, fib_type = fib_subtype)
+        mutate_meta(mutate, frc_type = fib_subtype)
     }
     
     clmns <- c(
-      "cell_type", "lec_type", "fib_type",
+      "cell_type", "lec_type", "frc_type",
       "treatment", "orig.ident", "rep", "chikv_grp", all_gns
     )
     
@@ -741,7 +778,7 @@ right <- plot_grid(
 bot <- plot_grid(
   left, right,
   labels = c("", "E"), label_size = ttl_pt2 * 1.5,
-  rel_widths = c(0.75, 1),
+  # rel_widths = c(0.75, 1),
   nrow = 1
 )
 
@@ -773,11 +810,12 @@ h_dat <- so_lec %>%
     .x %>%
       mutate_meta(
         mutate,
+        lec_type = lec_subtype,
         lec_type = recode(lec_type, unassigned = "unassigned-LEC")
       )
   })
 
-rm(so_lec_8, so_lec_24)
+rm(so_lec)
 
 h_mat <- h_dat %>%
   map(~ {
@@ -1138,6 +1176,7 @@ F.  Top upregulated genes identified for the terms shown in E are plotted as des
 
 ```{r "DEGs"}
 # Create object to compare CHIKV 24 hpi with 8 hpi
+# only use top two biological replicates with the most cells
 top_reps <- as.character(so_24$rep) %>%
   table() %>%
   sort() %>%
@@ -1173,6 +1212,7 @@ so_24_chikv <- so_24 %>%
   subset(treatment == "CHIKV")
 
 # Identify up/down regulated genes
+# use FindConservedMarkers()
 deg_args <- list(
   so_in      = c("so_8", "so_8", "so_24", "so_24", "so_merge", "so_merge", "so_8_chikv", "so_24_chikv"),
   treat_clmn = c(rep("treatment", 6), rep("chikv_grp", 2)),
@@ -1195,16 +1235,15 @@ degs <- deg_args %>%
     else                           typ <- ""
     
     prfx <- str_remove(args$so_in, "^so_")
-    # file <- str_c(prfx, "_subtype_chikv", typ, "_markers.tsv")
     file <- str_c(prfx, "_lectype_chikv", typ, "_markers.tsv")
     file <- here("results/tables", file)
     
     d <- eval(sym(args$so_in)) %>%
       get_degs(
-        log_fc  = args$log_fc,
-        file    = file,
-        ident_1 = args$ident_1,
-        ident_2 = args$ident_2,
+        log_fc     = args$log_fc,
+        file       = file,
+        ident_1    = args$ident_1,
+        ident_2    = args$ident_2,
         treat_clmn = args$treat_clmn,
         type_clmn  = "lec_type"
       ) %>%
@@ -1234,7 +1273,7 @@ go_degs <- degs[grepl("^so_(8|merge)-up$", names(degs))] %>%
   map(~ {
     .x %>%
       arrange(max_pval) %>%
-      split(.$subtype) %>%
+      split(.$lec_type) %>%
       map(pull, gene) %>%
       map(head, 200)
   })
@@ -1244,14 +1283,14 @@ go <- go_degs %>%
     typ   <- str_remove(.y, ".+(?=-)")
     so_in <- str_remove(.y, "-.+$")
     prfx  <- str_remove(so_in, "^so_")
-    # file  <- str_c(prfx, "_lectype_chikv", typ, "_go")
-    file  <- str_c(prfx, "_subtype_chikv", typ, "_go")
+    file  <- str_c(prfx, "_lectype_chikv", typ, "_go")
     file  <- here("results/tables", file)
     
     .x %>%
       get_go(
-        so_in = eval(sym(so_in)),
-        file  = file
+        so_in     = eval(sym(so_in)),
+        file      = file,
+        type_clmn = "lec_type"
       )
   })
 ```
@@ -1263,8 +1302,9 @@ so_8_re <- "^(so_8-|so_[0-9]+_chikv)"
 clusters <- go %>%
   imap(~ {
     ovlp <- ifelse(grepl(so_8_re, .y), 3, 10)
+    k    <- ifelse(grepl(so_8_re, .y), 5, 5)
     
-    get_clusters(.x, k = 3, n_overlap = ovlp, n_shared = 1)
+    get_clusters(.x, k = k, n_overlap = ovlp, n_shared = 1)
   }) %>%
   discard(is.null)
 
@@ -1326,7 +1366,7 @@ sim_heatmap <- cluster_sim %>%
 #   pull(matches) %>%
 #   unique()
 
-ttls <- as_labeller(c(`1` = "Innate Immune Response", `2` = "Inflammatory Response"))
+ttls <- as_labeller(c(`1` = "Innate Immune Response", `3` = "Inflammatory Response"))
 
 # Cluster colors
 clrs_8  <- c(`1` = "#E69F00", `2` = "#56B4E9")
@@ -1334,23 +1374,29 @@ clrs_24 <- c(`1` = "#D7301F", `2` = "#6A51A3")
 
 # Create heatmaps
 # pval, qval, n_overlap cutoffs should match those used for clustering
+# n_clst <- ifelse(grepl(so_8_re, .y), 1, 2)
 go_heat <- clusters %>%
   imap(~ {
     go_in  <- go[[.y]]
     ovlp   <- ifelse(grepl(so_8_re, .y), 3, 10)
-    n_clst <- ifelse(grepl(so_8_re, .y), 1, 2)
     n_gns  <- ifelse(grepl(so_8_re, .y), 10, 20)
     
-    if (grepl("^so_8-", .y)) clrs <- clrs_8
-    else                     clrs <- clrs_24
+    if (grepl("^so_8-", .y)) {
+      clrs  <- clrs_8
+      clsts <- 1:5
+    } else {
+      clrs  <- clrs_24
+      # clsts <- c(1, 3)
+      clsts <- 1:5
+    }
     
     .x$clusters %>%
       create_go_heatmap(
-        go_in      = go_in,
-        n_overlap  = ovlp,
-        n_genes    = n_gns,
-        n_clusters = n_clst,
-        clrs       = clrs,
+        go_in     = go_in,
+        n_overlap = ovlp,
+        n_genes   = n_gns,
+        clusters  = clsts,
+        clrs      = clrs,
         cluster_labels = ttls
       )
   })
@@ -1381,7 +1427,8 @@ gns <- go[[obj]]@compareClusterResult %>%
   group_by(geneID, cluster) %>%
   summarize(n = n_distinct(Cluster), .groups = "drop") %>%
   distinct(geneID, .keep_all = TRUE) %>%
-  arrange(cluster, desc(n))
+  arrange(cluster, desc(n)) %>%
+  filter(geneID %in% c("Bst2", "Zbp1", "Irf7"))
 
 top_sig <- degs[[obj]] %>%
   filter(gene %in% gns$geneID) %>%
@@ -1402,7 +1449,8 @@ examples_8 <- create_gene_plots(
   deg_data   = list("8hpi" = degs$`so_8-up`, "24hpi" = degs$`so_merge-up`),
   gns        = gns,
   clrs       = clrs_8,
-  cell_types = 8
+  cell_types = 8,
+  type_clmn  = "lec_type"
   # cell_types = NULL,
   # only_show_upreg = FALSE
 )
@@ -1444,14 +1492,14 @@ examples_24 <- create_gene_plots(
   deg_data   = list("8hpi" = degs$`so_8-up`, "24hpi" = degs$`so_merge-up`),
   gns        = gns,
   clrs       = clrs_24,
-  cell_types = 8
+  cell_types = 8,
+  type_clmn  = "lec_type"
   # cell_types = NULL,
   # only_show_upreg = FALSE,
 )
 ```
 
 ```{r "GO figures", fig.width = 11.8, fig.height = 9}
-
 # # Create final figure
 # left <- plot_grid(
 #   go_heat$`so_8-up`$heatmap,
@@ -2632,7 +2680,7 @@ bx_plt_dat <- typ_bx_dat %>%
     new_cell_type = ifelse(lec_type == "BEC", lec_type, cell_type),
     new_cell_type = ifelse(new_cell_type %in% lec_cell_types, "LEC", new_cell_type),
     new_lec_type  = ifelse(cell_type %in% lec_cell_types, lec_type, "other"),
-    new_fib_type  = ifelse(cell_type %in% c(fib_cell_types, "FRC"), fib_type, "other")
+    new_frc_type  = ifelse(cell_type %in% c(fib_cell_types, "FRC"), frc_type, "other")
   )
 
 # Plot Marco and Mxra8 expression
@@ -2648,10 +2696,10 @@ lec_fig <- bx_plt_dat %>%
   )
 
 fib_fig <- bx_plt_dat %>%
-  filter(new_fib_type != "other") %>%
+  filter(new_frc_type != "other") %>%
   create_example_gene_fig(
     gns    = gns,
-    x_clmn = "new_fib_type",
+    x_clmn = "new_frc_type",
     ttl    = "FRC subsets",
     clrs   = subtype_cols
   ) %>%
@@ -2718,10 +2766,10 @@ gn_fig1 <- gn_fig1 %>%
   )
 
 gn_fig2 <- bx_dat %>%
-  filter(new_fib_type != "other") %>%
+  filter(new_frc_type != "other") %>%
   create_example_gene_fig2(
     gns     = "Cxcl13",
-    x_clmn  = "new_fib_type",
+    x_clmn  = "new_frc_type",
     al_clmn = "treatment",
     clrs    = subtype_cols
   )
@@ -2735,7 +2783,7 @@ fig_top <- wrap_plots(
 
 # FRC abundance
 abun_dat <- bx_plt_dat %>%
-  filter(new_fib_type != "other")
+  filter(new_frc_type != "other")
 
 frc_stack <- abun_dat %>%
   mutate(
@@ -2743,7 +2791,7 @@ frc_stack <- abun_dat %>%
     tm_treat = fct_relevel(tm_treat, c("8hpi-mock", "8hpi-CHIKV", "24hpi-mock", "24hpi-CHIKV"))
   ) %>%
   plot_frequency(
-    "new_fib_type", "tm_treat",
+    "new_frc_type", "tm_treat",
     plot_colors = subtype_cols,
     stack = TRUE
   ) +
@@ -2754,7 +2802,7 @@ mrc_bars <- abun_dat %>%
   filter(tm == "24hpi") %>%
   mutate(treatment = fct_relevel(treatment, treats)) %>%
   plot_frequency(
-    "new_fib_type", "orig.ident", "treatment",
+    "new_frc_type", "orig.ident", "treatment",
     p_method = "t",
     plot_colors = c(mock = "#F7AF34", CHIKV = "#A1342D")
   ) +
@@ -2789,13 +2837,13 @@ final_fig
 # 
 # so_24 %>%
 #   plot_violin(
-#     "Cxcl13", "fib_type", "treatment",
+#     "Cxcl13", "frc_type", "treatment",
 #     method = "boxplot"
 #   )
 # 
 # so_24 %>%
 #   plot_scatter(
-#     "fib_type", group_col = "treatment",
+#     "frc_type", group_col = "treatment",
 #     size = 0.5
 #   )
 # 
@@ -2807,21 +2855,21 @@ final_fig
 # 
 # so_24 %>%
 #   plot_violin(
-#     "Tnfsf11", "fib_type", "treatment",
+#     "Tnfsf11", "frc_type", "treatment",
 #     method = "boxplot"
 #   )
 # 
 # abun_dat %>%
 #   filter(tm == "8hpi") %>%
 #   plot_frequency(
-#     "new_fib_type", "orig.ident", stack = TRUE,
+#     "new_frc_type", "orig.ident", stack = TRUE,
 #     plot_colors = subtype_cols
 #   ) 
 # 
 # bx_plt_dat %>%
-#   filter(tm == "24hpi", new_fib_type != "other") %>%
+#   filter(tm == "24hpi", new_frc_type != "other") %>%
 #   plot_frequency(
-#     "new_fib_type", "treatment",
+#     "new_frc_type", "treatment",
 #     p_label = "none"
 #   )
 ```
@@ -2833,7 +2881,6 @@ final_fig
 <br>
 
 ```{r "LEC integration", eval = FALSE}
-
 # Use original broad cell types based on clustering resolution 5
 # remove parenthesis from 8 hpi so format matches 24 hpi
 # add tm column to 24 hpi
@@ -3039,7 +3086,6 @@ so_lec_merge %>%
   subset(tm == "24hpi") %>%
   subset(treatment == "CHIKV") %>%
   plot_violin("Madcam1", "type", group_col = "chikv_grp", method = "boxplot")
-
 ```
 
 ```{r "LEC ANNOTATIONS PARAMS", eval = FALSE}
@@ -3337,8 +3383,7 @@ ann_clst_res <- tibble(
 
 ```
 
-```{r}
-
+```{r, eval = FALSE}
 # Use clustifyr params identified above
 # 2000 genes, resolution 11
 so_lec_merge <- so_lec_merge %>%
