@@ -16,6 +16,12 @@ params:
   type_res:     10                        # Clustering resolution for annotating cell types
   lec_res:      10                        # Clustering resolution for annotating LECs
   frc_res:      3                         # Clustering resolution for annotating fibroblasts
+  
+  so_24:        "~/Dropbox/Ryan/Projects/morrison-scRNA-seq/results/2021-01-08/sobjs/so.rds"
+  
+  unenr_8:      "results/2021-04-16"
+  enr_8:        "results/2021-07-16"
+  
 editor_options: 
   chunk_output_type: console
 ---
