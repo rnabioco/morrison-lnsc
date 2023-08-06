@@ -1,7 +1,0 @@
-Estimated Number of Cells,Mean Reads per Cell,Median Genes per Cell,Number of Reads,Valid Barcodes,Sequencing Saturation,Q30 Bases in Barcode,Q30 Bases in RNA Read,Q30 Bases in UMI,Reads Mapped to Genome,Reads Mapped Confidently to Genome,Reads Mapped Confidently to Intergenic Regions,Reads Mapped Confidently to Intronic Regions,Reads Mapped Confidently to Exonic Regions,Reads Mapped Confidently to Transcriptome,Reads Mapped Antisense to Gene,Fraction Reads in Cells,Total Genes Detected,Median UMI Counts per Cell,sample
-"11,285","67,326","3,598","759,770,422",97.8%,53.3%,94.4%,87.6%,92.9%,86.6%,83.4%,4.4%,17.5%,61.5%,73.3%,5.5%,91.5%,"25,882","14,164",A1
-"10,525","61,986","3,870","652,407,587",97.9%,49.0%,94.4%,87.3%,93.0%,88.1%,85.2%,4.0%,17.8%,63.4%,75.4%,5.5%,92.7%,"25,765","15,939",A2
-"18,956","31,625","3,217","599,491,848",97.9%,34.8%,94.3%,87.4%,93.0%,87.6%,84.6%,4.2%,19.1%,61.3%,75.1%,5.0%,91.4%,"26,205","10,690",A3
-"9,928","63,448","4,010","629,912,086",97.5%,53.5%,94.3%,87.6%,92.8%,87.9%,85.2%,4.5%,22.2%,58.5%,73.2%,7.2%,90.6%,"25,822","13,454",M1
-"11,153","60,230","4,055","671,746,041",97.6%,52.0%,94.3%,87.9%,92.9%,90.2%,87.3%,4.4%,22.9%,60.1%,75.7%,6.9%,91.6%,"26,077","14,102",M2
-"13,414","58,125","3,167","779,694,347",97.5%,58.6%,94.4%,88.7%,92.9%,92.5%,89.8%,4.1%,22.9%,62.8%,77.5%,7.9%,89.9%,"26,225","9,527",M3

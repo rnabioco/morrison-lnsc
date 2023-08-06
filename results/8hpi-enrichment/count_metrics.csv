@@ -1,5 +1,0 @@
-Estimated Number of Cells,Mean Reads per Cell,Median Genes per Cell,Number of Reads,Valid Barcodes,Sequencing Saturation,Q30 Bases in Barcode,Q30 Bases in RNA Read,Q30 Bases in UMI,Reads Mapped to Genome,Reads Mapped Confidently to Genome,Reads Mapped Confidently to Intergenic Regions,Reads Mapped Confidently to Intronic Regions,Reads Mapped Confidently to Exonic Regions,Reads Mapped Confidently to Transcriptome,Reads Mapped Antisense to Gene,Fraction Reads in Cells,Total Genes Detected,Median UMI Counts per Cell,sample
-"2,723","24,326","2,004","66,239,673",97.3%,57.2%,93.1%,87.1%,92.5%,90.0%,87.2%,5.3%,19.5%,62.4%,73.9%,7.8%,78.7%,"21,989","4,515",M1
-"3,054","29,554",869,"90,257,336",97.5%,86.6%,93.3%,87.5%,92.7%,91.2%,88.4%,5.1%,15.2%,68.2%,77.2%,5.9%,70.9%,"19,752","1,500",M2
-"1,760","54,912","2,224","96,644,612",97.2%,74.7%,93.2%,87.4%,92.6%,92.0%,89.4%,4.6%,15.9%,68.9%,77.3%,7.2%,78.4%,"21,659","5,674",AF1
-"1,342","38,480","1,610","51,640,723",97.2%,73.3%,93.2%,87.5%,92.6%,92.7%,89.5%,4.2%,11.9%,73.4%,79.9%,5.2%,70.7%,"19,725","3,708",AF2
