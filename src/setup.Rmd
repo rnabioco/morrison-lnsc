@@ -47,8 +47,6 @@ library(knitr)
 library(broom)
 
 source(here(params$src_dir, "funs.R"))
-
-chikv_grps <- c("CHIKV-low", "CHIKV-high")
 ```
 
 ```{r "functions"}
@@ -1285,10 +1283,22 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
 ```
 
 ```{r "setup parameters"}
+# Check for saved objects
 create_obj <- !file.exists(here(params$so_dir, "so_merge.qs"))
 
-fib_cell_types <- c("Fibroblasts", "Stromal cells", "Stromal cells (DN)")
+# Cell types for FRCs and LECs
+frc_cell_types <- c("Fibroblasts", "Stromal cells", "Stromal cells (DN)")
 lec_cell_types <- "Endothelial cells"
+
+# Treatment labels
+treat_key <- c(
+  M  = "mock",
+  A  = "CHIKV",
+  AF = "CHIKV"
+)
+
+# CHIKV group labels
+chikv_grps <- c("CHIKV-low", "CHIKV-high")
 ```
 
 ```{r "references"}
@@ -1319,9 +1329,10 @@ ref_frc <- cbind(ref_lymphnodestromal, ref_frc)
 
 
 
-```{r "create 8hpi object 1", include = FALSE, eval = create_so}
+```{r "create 8hpi object", include = FALSE, eval = create_obj}
 # Create Seurat object
-mats <- params$samples %>%
+mats <- here(params$unenr_dir) %>%
+  list.dirs(recursive = FALSE, full.names = FALSE) %>%
   set_names() %>%
   map_chr(~ here(file.path(params$unenr_dir, .x, "outs/filtered_feature_bc_matrix")))
 
@@ -1342,11 +1353,14 @@ sobjs <- mats %>%
 sobjs <- sobjs %>%
   map(~ {
     .x %>%
-      mutate_meta(
-        mutate,
-        pct_CHIKV      = nCount_CHIKV / (nCount_RNA + nCount_CHIKV),
-        CHIKV_sgRNA_fc = (CHIKV_sgRNA + 1) / (CHIKV_5 + 1),
-      )
+      mutate_meta(~ {
+        .x %>%
+          rename_with(
+            .cols = starts_with("CHIKV_AF15561"),
+            ~ str_remove(.x, "_AF15561")
+          ) %>%
+          mutate(pct_CHIKV = nCount_CHIKV / (nCount_RNA + nCount_CHIKV))
+      })
   })
 
 # Format sample/replicate names
@@ -1355,22 +1369,35 @@ sobjs <- sobjs %>%
     .x %>%
       mutate_meta(
         mutate,
-        treatment = str_extract(orig.ident, "^[A-Z]+"),
-        treatment = treats[treatment],
-        rep       = str_extract(orig.ident, "[0-9]+$"),
-        tm        = params$tm,
-        sample    = str_c(treatment, tm, rep, sep = "-")
+        treatment  = str_extract(orig.ident, "^[A-Z]+"),
+        treatment  = treat_key[treatment],
+        rep        = str_extract(orig.ident, "[0-9]+$"),
+        tm         = params$tm,
+        orig.ident = str_c(treatment, "-", rep),
+        sample     = str_c(treatment, tm, rep, sep = "-")
       )
   })
 
 # Filter, normalize, and merge objects
-# CELL CALLS FROM CELLRANGER DO NOT LOOK AS ACCURATE FOR AF2
+# CELL CALLS FROM CELLRANGER DO NOT LOOK AS ACCURATE FOR AF2 (CHIKV-2)
 # REMOVE CELLS WITH <= 800 UMIs
 # SHOULD MODIFY CODE TO CHANGE QC CLASS FOR RAW OBJECT!!
+sobjs <- sobjs %>%
+  map(~ {
+    .x %>%
+      mutate_meta(
+        mutate,
+        qc_class = ifelse(
+          orig.ident == "CHIKV-2" & nCount_RNA <= 800,
+          "low_umi_count",
+          qc_class
+        )
+      )
+  })
+
 so <- sobjs %>%
   map(~ {
     .x %>%
-      subset(orig.ident != "AF2" | nCount_RNA > 800) %>%
       subset(subset = qc_class == "pass") %>%
       norm_sobj(
         cc_scoring = TRUE,
@@ -1379,7 +1406,7 @@ so <- sobjs %>%
       )
   })
 
-so <- merge(so[[1]], so[2:length(so)])
+so <- merge(so[[1]], so[-1])
 
 # Cluster cells
 so <- so %>%
@@ -1393,29 +1420,29 @@ so <- so %>%
     vars.to.regress = "nCount_RNA"
   ) %>%
   cluster_RNA(
-    resolution = rslns,
+    resolution = c(1, 3, 5, 10),
     dims       = 1:40
   )
 
-# # Save unfiltered objects and meta.data
-# # Save and delete raw objects asap to free up memory
-# so_raw <- merge(sobjs[[1]], sobjs[2:length(sobjs)])
-# 
-# so_raw_df <- so_raw@meta.data %>%
-#   as_tibble(rownames = "cell_id")
-# 
-# save_objs(so_raw)
-# 
-# rm(sobjs, so_raw)
+# Save unfiltered objects and meta.data
+# Save and delete raw objects asap to free up memory
+so_raw <- merge(sobjs[[1]], sobjs[-1])
+
+save_objs(so_raw, "so_raw_8", ob_dir = params$so_dir)
+
+so_raw_df <- read_tsv(here(params$so_dir, "so_raw_8.tsv.gz"))
+
+rm(sobjs, so_raw)
 ```
 
-```{r "create 8hpi object 2", eval = create_so}
+```{r "add enriched counts to 8hpi object", eval = create_obj}
 # Create Seurat object for CHIKV-enriched data
-mat <- params$samples %>%
+mats <- here(params$enr_dir) %>%
+  list.dirs(recursive = FALSE, full.names = FALSE) %>%
   set_names() %>%
-  map_chr(~ here(params$enr_dir, .x, "outs/filtered_feature_bc_matrix"))
+  map_chr(~ here(file.path(params$enr_dir, .x, "outs/filtered_feature_bc_matrix")))
 
-so_enr <- mat %>%
+so_enr <- mats %>%
   imap(~ {
     .x %>%
       create_virus_obj(
@@ -1429,45 +1456,55 @@ so_enr <- mat %>%
       )
   })
 
-so_enr <- merge(so_enr[[1]], so_enr[2:length(so_enr)])
+so_enr <- merge(so_enr[[1]], so_enr[-1])
+
+# Format sample/replicate names
+so_enr <- so_enr %>%
+  mutate_meta(
+    mutate,
+    treatment  = str_extract(orig.ident, "^[A-Z]+"),
+    treatment  = treat_key[treatment],
+    rep        = str_extract(orig.ident, "[0-9]+$"),
+    tm         = params$tm,
+    orig.ident = str_c(treatment, "-", rep),
+    sample     = str_c(treatment, tm, rep, sep = "-")
+  )
 
 # Add new CHIKV counts to meta.data from unfiltered Seurat objects
 chikv_feats <- c(
-  "5"            = "chikv_CHIKV-AF15561-5",
-  "sgRNA"        = "chikv_CHIKV-AF15561-sgRNA",
-  "neg"          = "chikv_CHIKV-AF15561-neg",
-  "nCount_CHIKV" = "nCount_CHIKV",
-  "pct_CHIKV"    = "pct_CHIKV",
-  "nCount_RNA"   = "nCount_RNA"
+  "enr_5"            = "chikv_CHIKV-AF15561-5",
+  "enr_sgRNA"        = "chikv_CHIKV-AF15561-sgRNA",
+  "enr_neg"          = "chikv_CHIKV-AF15561-neg",
+  "enr_nCount_CHIKV" = "nCount_CHIKV",
+  "enr_pct_CHIKV"    = "pct_CHIKV",
+  "enr_nCount_RNA"   = "nCount_RNA"
 )
 
 get_feats <- c("orig.ident", chikv_feats)
 
 so_enr_df <- so_enr %>%
   FetchData(get_feats) %>%
-  rename(!!!chikv_feats) %>%
-  rename_with(~ str_c("enr_", .x), .cols = all_of(names(chikv_feats))) %>%
+  dplyr::rename(!!!chikv_feats) %>%
   rownames_to_column("cell_id")
 
 so_enr_df <- so_raw_df %>%
   full_join(so_enr_df, by = c("cell_id", "orig.ident"))
 
 clmns <- c(
-  "cell_id",   "orig.ident",
-  "UMAP_1",    "UMAP_2",
-  "cell_type", "lec_type",
-  "fib_type" 
+  "cell_id", "orig.ident",
+  "UMAP_1", "UMAP_2"
 )
 
 so_enr_df <- so@meta.data %>%
   as_tibble(rownames = "cell_id") %>%
-  select(all_of(clmns)) %>%
+  dplyr::select(all_of(clmns)) %>%
   full_join(so_enr_df, by = c("cell_id", "orig.ident"))
 
 # Format enriched counts
 enr_counts <- so_enr_df %>%
   mutate(
-    across(starts_with("enr_"), replace_na, 0),
+    across(starts_with("enr_"), ~ replace_na(.x, 0)),
+    
     tot_nCount_CHIKV = nCount_CHIKV + enr_nCount_CHIKV,
     tot_nCount_RNA   = nCount_RNA + enr_nCount_RNA,
     tot_pct_CHIKV    = (tot_nCount_CHIKV / tot_nCount_RNA) * 100,
@@ -1476,37 +1513,42 @@ enr_counts <- so_enr_df %>%
     tot_sgRNA = CHIKV_sgRNA + enr_sgRNA,
     tot_neg   = CHIKV_neg   + enr_neg
   ) %>%
-  select(cell_id, starts_with("tot")) %>%
+  dplyr::select(cell_id, starts_with("tot")) %>%
   column_to_rownames("cell_id")
 
 # Add enriched counts to object
 so <- so %>%
-  AddMetaData(enr_counts)
+  AddMetaData(enr_counts) %>%
+  mutate_meta(
+    mutate,
+    chikv_grp = ifelse(tot_nCount_CHIKV > 0, chikv_grps[2], chikv_grps[1])
+  )
 
-so_df <- so@meta.data %>%
-  as_tibble(rownames = "cell_id")
+# Check that samples are in the same order for the enriched and unenriched objects
+# this is important for matching the cell barcodes
+stopifnot(identical(unique(so$orig.ident), unique(so_enr_df$orig.ident)))
 
-# Add enriched counts to LEC object
-so_lec_enr <- so_lec %>%
-  AddMetaData(enr_counts)
+# Save objects
+save_objs(so, "so_8", ob_dir = params$so_dir)
+save_objs(so_enr, "so_enr_8", ob_dir = params$so_dir, save_meta = FALSE)
 
-so_lec_enr_df <- so_lec_enr@meta.data %>%
-  as_tibble(rownames = "cell_id")
+so_enr_df %>%
+  write_tsv(here(params$so_dir, "so_enr_8.tsv.gz"))
+
+rm(so_enr)
 ```
 
 
 
 ```{r "integrate samples", eval = create_obj}
 # Adjust 8 and 24 hpi objects
-so_8  <- read_rds(file.path(params$orig_so_dir, "2021-07-16/sobjs/so.rds"))
-so_24 <- read_rds(file.path(params$orig_so_dir, "2021-01-08/sobjs/so.rds"))
+so_24 <- params$so_24 %>%
+  read_rds() %>%
+  mutate_meta(mutate, tm = "24hpi")
 
-so_8 <- so_8 %>%
-  mutate_meta(
-    mutate,
-    orig.ident = str_c(treatment, "-", rep),
-    chikv_grp = ifelse(tot_nCount_CHIKV > 0, chikv_grps[2], chikv_grps[1])
-  )
+so_8 <- so
+
+rm(so)
 
 so_8  <- RenameCells(so_8, add.cell.id = "8hpi")
 so_24 <- RenameCells(so_24, add.cell.id = "24hpi")
@@ -1602,19 +1644,12 @@ so_merge <- so_merge %>%
 ```{r "fibroblast subsets", eval = create_obj}
 # Recluster fibroblasts and annotate PvCs
 so_frc <- so_merge %>%
-  subset(cell_type %in% fib_cell_types) %>%
+  subset(cell_type %in% frc_cell_types) %>%
   FindVariableFeatures(nfeatures = 2000) %>%
   ScaleData() %>%
   RunPCA()
   
 so_frc <- so_frc %>%
-  mutate_meta(
-    mutate,
-    integration_var = ifelse(
-      tm == "24hpi" & treatment == "CHIKV",
-      "chikv_24hpi", "other"
-    )
-  ) %>%
   RunHarmony(
     c("rep", "integration_var"),
     dims = 1:40, plot_convergence = TRUE
@@ -1680,19 +1715,16 @@ so_lec <- so_merge %>%
   RunPCA()
 
 so_lec <- so_lec %>%
-  mutate_meta(
-    mutate,
-    integration_var = ifelse(
-      tm == "24hpi" & treatment == "CHIKV",
-      "chikv_24hpi",
-      "other"
-    )
-  ) %>%
   RunHarmony(
     c("rep", "integration_var"),
     dims = 1:40, plot_convergence = TRUE
   ) %>%
-  RunUMAP(reduction = "harmony", dims = 1:40)
+  RunUMAP(
+    dims = 1:40,
+    reduction      = "harmony",
+    reduction.name = "humap",
+    reduction.key  = "hUMAP_"
+  )
 
 # Parameters to test
 # get LEC annotations using 100 different settings
@@ -1927,15 +1959,47 @@ ann_clst_res <- tibble(
   ungroup() %>%
   arrange(desc(n)) %>%
   mutate(id = row_number())
+
+# Plot representative settings for each cluster
+ann_clst_plots <- ann_clst_res %>%
+  pmap(~ {
+    args <- list(...)
+    
+    so_lec %>%
+      clustify(
+        ref_mat     = ref_lec,
+        cluster_col = args$rsln,
+        n_genes     = args$n_genes,
+        threshold   = 0.55
+      ) %>%
+      plot_scatter(
+        "type",
+        x = "hUMAP_1", 
+        y = "hUMAP_2",
+        size = 0.05,
+        plot_colors = c(fLEC = "red", tzLEC = "black", Marco_LEC = "green")
+      ) + 
+      facet_grid(tm ~ treatment)
+  })
 ```
 
 ```{r "lec refined annotations", eval = create_obj}
-# Adjust clusters based on Marco expression
-# lec_clst <- str_c("RNA_snn_res.", params$lec_res)
-lec_clst <- str_c("RNA_snn_res.", 4)
+# Use representative settings identified from consensus annotations
+lec_clst <- str_c("RNA_snn_res.", 11.5)
 
 so_lec <- so_lec %>%
-  mutate_meta(mutate, lec_subtype = top_type) %>%
+  mutate_meta(dplyr::select, -starts_with("UMAP_")) %>%
+  clustify(
+    ref_mat     = ref_lec,
+    cluster_col = lec_clst,
+    n_genes     = 1500,
+    threshold   = 0.55
+   )
+
+# Adjust clusters based on Marco expression
+# lec_clst <- str_c("RNA_snn_res.", params$lec_res)
+so_lec <- so_lec %>%
+  mutate_meta(mutate, lec_subtype = type) %>%
   classify_markers(
     feats    = "Marco",
     filt     = Marco > 0.6,
@@ -1981,6 +2045,8 @@ save_objs(so_frc,   ob_dir = params$so_dir)
 save_objs(so_lec,   ob_dir = params$so_dir)
 save_objs(so_8,     ob_dir = params$so_dir)
 save_objs(so_24,    ob_dir = params$so_dir)
+
+rm(so_merge, so_frc, so_lec, so_8, so_24)
 ```
 
 ```{r "load objects"}
@@ -1991,9 +2057,9 @@ so_24    <- qread(file.path(params$so_dir, "so_24.qs"))
 ```
 
 ```{r "theme"}
-# Set levels
+# Set levels for samples and treatments
 sam_lvls <- unique(so_24$orig.ident)
-treats   <- unique(so_24$treatment)
+treats   <- unique(treat_key)
 
 # ggplot2 themes
 txt_pt1  <- 10
@@ -2151,7 +2217,7 @@ marco_expr <- c(Marco_LEC = "\"Marco\"^\"+\"*\" LEC\"")
 ```{r "prepare 8hpi object", eval = FALSE}
 
 lec_cell_types <- "Endothelial cells"
-fib_cell_types <- c("Fibroblasts", "Stromal cells", "Stromal cells (DN)")
+frc_cell_types <- c("Fibroblasts", "Stromal cells", "Stromal cells (DN)")
 
 so_8_dir <- here(params$so_dir, "so_8.qs")
 
@@ -2179,7 +2245,7 @@ if (!file.exists(so_8_dir)) {
   # ref_frc is ref_lymphnodestromal with immgen fibroblast references added
   so_fib <- so_8 %>%
     subset_sobj(
-      subset       = cell_type %in% fib_cell_types,
+      subset       = cell_type %in% frc_cell_types,
       rsln         = rslns,
       dims         = 1:40
       # regress_vars = "nCount_RNA"
@@ -2268,7 +2334,7 @@ if (!file.exists(so_24_dir)) {
       mutate,
       cell_type = case_when(
         fib_type == "PvC"             ~ fib_type,
-        cell_type %in% fib_cell_types ~ "FRC",
+        cell_type %in% frc_cell_types ~ "FRC",
         TRUE                          ~ cell_type
       )
     )
@@ -2304,7 +2370,7 @@ if (!file.exists(so_24_dir)) {
       fib_type = if_else(fib_subtype == "other", cell_type, fib_subtype),
       cell_type = case_when(
         fib_type == "PvC"             ~ fib_type,
-        cell_type %in% fib_cell_types ~ "FRC",
+        cell_type %in% frc_cell_types ~ "FRC",
         TRUE                          ~ cell_type
       )
     )

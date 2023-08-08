@@ -12,16 +12,18 @@ output:
 params:
   src_dir:      "src"
   so_dir:       "~/Dropbox/Ryan/Projects/morrison-lnsc/results/sobjs"
-  orig_so_dir:  "~/Dropbox/Ryan/Projects/morrison-scRNA-seq/results"
+  so_24:        "~/Dropbox/Ryan/Projects/morrison-scRNA-seq/results/2021-01-08/sobjs/so.rds"
+  
+  tm:           "8hpi"                    # Timepoint label
+  unenr_dir:    "results/2021-04-16"      # Directory for unenriched data
+  enr_dir:      "results/2021-07-16"      # Directory for CHIKV-enriched data
+  gene_min:     250                       # Min number of detected genes per cell
+  gene_max:     8000                      # Max number of detected genes per cell
+  mito_max:     20                        # Max percentage mito reads per cells
+  
   type_res:     10                        # Clustering resolution for annotating cell types
   lec_res:      10                        # Clustering resolution for annotating LECs
   frc_res:      3                         # Clustering resolution for annotating fibroblasts
-  
-  so_24:        "~/Dropbox/Ryan/Projects/morrison-scRNA-seq/results/2021-01-08/sobjs/so.rds"
-  
-  unenr_8:      "results/2021-04-16"
-  enr_8:        "results/2021-07-16"
-  
 editor_options: 
   chunk_output_type: console
 ---
@@ -217,33 +219,44 @@ count_bxs <- plot_grid(
 
 
 
-# # CALCULATE P-VALUES
-# x <- dat %>%
-#   filter(chikv_grp == "CHIKV-high")
-# 
-# typs <- table(x$lec_type)
-# typs <- names(typs[typs > 2])
-# 
-# typs %>%
-#   set_names() %>%
-#   map_dfr(~ {
-#     x <- x %>%
-#       mutate(lec_type = ifelse(lec_type == .x, lec_type, "other")) %>%
-#       split(.$lec_type)
-# 
-#     x <- x[c(.x, "other")]
-#     
-#     typ_dat <- x[[1]]$tot_pct_CHIKV
-#     oth_dat <- x[[2]]$tot_pct_CHIKV
-# 
-#     p <- wilcox.test(typ_dat, oth_dat, alternative = "g")
-#     p <- tidy(p)
-# 
-#     p %>%
-#       mutate(type = .x, n = length(typ_dat), mean = mean(typ_dat), sd = sd(typ_dat))
-#   }) %>%
-#   arrange(p.value) %>%
-#   mutate(p_adj = p.adjust(p.value, method = "bonferroni"))
+# CALCULATE P-VALUES
+x <- dat %>%
+  filter(chikv_grp == "CHIKV-high")
+
+typs <- table(x$lec_type)
+typs <- names(typs[typs > 2])
+
+typs %>%
+  set_names() %>%
+  map_dfr(~ {
+    x <- x %>%
+      mutate(p_type = ifelse(lec_type == .x, lec_type, "other")) %>%
+      split(.$p_type)
+
+    x <- x[c(.x, "other")]
+    
+    typ_dat <- x[[1]]$tot_pct_CHIKV
+    oth_dat <- x[[2]]$tot_pct_CHIKV
+    
+    # x <- x %>%
+    #   split(.$lec_type)
+    # typ_dat <- x["fLEC"][[1]]$tot_pct_CHIKV
+    # oth_dat <- x[.x][[1]]$tot_pct_CHIKV
+
+    p <- wilcox.test(typ_dat, oth_dat, alternative = "g")
+    p <- tidy(p)
+
+    p %>%
+      mutate(
+        type = .x,
+        n    = length(typ_dat),
+        med  = median(typ_dat),
+        mean = mean(typ_dat),
+        sd   = sd(typ_dat)
+      )
+  }) %>%
+  arrange(p.value) %>%
+  mutate(p_adj = p.adjust(p.value, method = "bonferroni"))
 ```
 
 ```{r "fig1 examples", fig.width = 3, fig.height = 5}

@@ -6,8 +6,9 @@
 #' @param ob_in Seurat object to save.
 #' @param prfx Prefix to use for saved files. If set to NULL, the name of the object is used.
 #' @param ob_dir Directory to save files.
+#' @param save_meta Save meta.data as a table
 #' @export
-save_objs <- function(ob_in, prfx = NULL, ob_dir = so_dir) {
+save_objs <- function(ob_in, prfx = NULL, ob_dir = so_dir, save_meta = TRUE) {
   
   if (is.null(prfx)) {
     prfx <- deparse(substitute(ob_in))
@@ -16,9 +17,11 @@ save_objs <- function(ob_in, prfx = NULL, ob_dir = so_dir) {
   ob_in %>%
     qs::qsave(here(ob_dir, str_c(prfx, ".qs")))
   
-  ob_in@meta.data %>%
-    as_tibble(rownames = "cell_id") %>%
-    write_tsv(here(ob_dir, str_c(prfx, ".tsv.gz")))
+  if (save_meta) {
+    ob_in@meta.data %>%
+      as_tibble(rownames = "cell_id") %>%
+      write_tsv(here(ob_dir, str_c(prfx, ".tsv.gz")), progress = FALSE)
+  }
 }
 
 #' Plot color palette
@@ -1118,7 +1121,7 @@ classify_mod_score <- function(so_in, feats, prefix, cutoff = 1, clst_col, type_
 #' @param summary_fn Function to use for summarizing marker gene expression.
 #' @return Seurat object containing new cell type classifications.
 #' @export
-classify_markers <- function(so_in, feats, filt, type, clst_col, type_col,
+classify_markers <- function(so_in, feats, filt, type_label, clst_col, type_col,
                              summary_fn = mean) {
   clsts <- so_in %>%
     FetchData(c(feats, clst_col, type_col)) %>%
@@ -1133,7 +1136,7 @@ classify_markers <- function(so_in, feats, filt, type, clst_col, type_col,
       mutate,
       !!sym(type_col) := ifelse(
         !!sym(clst_col) %in% clsts,
-        type,
+        type_label,
         !!sym(type_col)
       )
     )
