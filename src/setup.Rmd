@@ -120,22 +120,7 @@ plot_example_gene <- function(so_in, feat, grp, box_colors = NULL,
   )
 }
 
-create_cor_heatmap <- function(df_in, ttl, lec_labs = NULL, ln_clr = fade_0) {
-  
-  # # Cell type labels
-  # lec_labs <- df_in %>%
-  #   format_labels(
-  #     lab_clmn = "lec_type",
-  #     char_vec = new_cell_labs,
-  #     expr_vec = marco_expr
-  #   )
-  # 
-  # ref_labs <- c(
-  #   Valve      = "Valve LEC",
-  #   Collecting = "Collecting LEC",
-  #   Ptx3_LEC   = "Ptx3 LEC",
-  #   Marco_LEC  = parse(text = marco_expr)
-  # )
+create_cor_heatmap <- function(df_in, ttl = NULL, lec_labs = NULL, ln_clr = fade_0) {
   
   if (!is.null(lec_labs)) {
     df_in <- df_in %>%
@@ -161,22 +146,19 @@ create_cor_heatmap <- function(df_in, ttl, lec_labs = NULL, ln_clr = fade_0) {
     ) +
     
     guides(fill = bar_gd()) +
-    
     scale_fill_gradientn(colors = c(fade_0, "#E69F00")) +
-    # scale_x_discrete(labels = ref_labs) +
-    # scale_y_discrete(labels = lec_labs) +
-    
     labs(title = ttl, x = "reference", y = "assigned type") +
     
     base_theme +
     theme(
-      legend.text = element_text(size = txt_pt1),
-      axis.line.x = element_blank(),
-      axis.line.y = element_blank(),
-      axis.text.x = element_text(hjust = 1, angle = 45, size = txt_pt1),
-      axis.text.y = element_text(hjust = 1, size = txt_pt1),
-      axis.title  = element_text(size = txt_pt2),
-      plot.title  = element_text(size = ttl_pt1)
+      aspect.ratio = n_distinct(df_in$assigned_type) / n_distinct(df_in$ref_type) * 0.75,
+      legend.text  = element_text(size = txt_pt1),
+      axis.line.x  = element_blank(),
+      axis.line.y  = element_blank(),
+      axis.text.x  = element_text(hjust = 1, angle = 45, size = txt_pt1),
+      axis.text.y  = element_text(hjust = 1, size = txt_pt1),
+      axis.title   = element_text(size = txt_pt2),
+      plot.title   = element_text(size = ttl_pt1)
     )
   
   if (!is.null(lec_labs)) {
