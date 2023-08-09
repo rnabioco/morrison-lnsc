@@ -1307,7 +1307,7 @@ add_pvals <- function(gg_in, x, xend, y, p_val, prefix = "", format_p = TRUE,
     unique()
   
   if (is.character(x)) {
-    x <- grep(x, x_lvls)
+    x <- grep(x, x_lvls, fixed = TRUE)
   }
   
   if (is.character(xend)) {

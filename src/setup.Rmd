@@ -1,14 +1,4 @@
 
-```{r "setup chunk opts", echo = FALSE}
-# Default chunk options
-knitr::opts_chunk$set(
-  message = FALSE,
-  warning = FALSE,
-  echo    = FALSE,
-  dpi     = 500
-)
-```
-
 ```{r "packages"}
 # plotting
 library(scales)
@@ -169,18 +159,27 @@ create_cor_heatmap <- function(df_in, ttl = NULL, lec_labs = NULL, ln_clr = fade
   res
 }
 
-create_gene_boxplot <- function(input, GENE, TYPE, clr = lec_type_cols[[TYPE]],
+create_gene_boxplot <- function(input, GENE, TYPE, type_clmn = "lec_type",
+                                clr = lec_type_cols[[TYPE]], lvls = NULL,
                                 pval_y = 5, use_adj_p = TRUE) {
   
   # Format plot data
   dat <- input %>%
-    FetchData(c("lec_type", "treatment", "rep", "orig.ident", "chikv_grp", GENE)) %>%
-    filter(lec_type == TYPE) %>%
+    FetchData(c(type_clmn, "treatment", "rep", "orig.ident", "chikv_grp", GENE)) %>%
+    filter(!!sym(type_clmn) == TYPE) %>%
     mutate(chikv_grp = ifelse(treatment == "mock", treatment, chikv_grp))
+  
+  if (!is.null(lvls)) {
+    dat <- dat %>%
+      mutate(chikv_grp = fct_relevel(chikv_grp, lvls))
+    
+  } else {
+    lvls <- unique(dat$chikv_grp)
+  }
   
   clrs <- set_names(
     c("grey", rep(clr, 2)),
-    unique(dat$chikv_grp)
+    lvls
   )
   
   # Calculate p-values
@@ -241,8 +240,7 @@ create_gene_boxplot <- function(input, GENE, TYPE, clr = lec_type_cols[[TYPE]],
           ...,
           p_val    = p,
           size     = txt_pt2 / .pt,
-          line_col = "grey75",
-          add_line = FALSE            #### FIX THIS ####
+          line_col = "grey75"
         )
     })
   
@@ -1115,7 +1113,7 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
                               exclude_cell_types = NULL) {
   
   # Genes to plot
-  genes <- names(gns)
+  genes <- names(gns) %||% gns
   
   # Format gene expression input data
   exp_data <- exp_data %>%
@@ -1124,7 +1122,7 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
         FetchData(c(type_clmn, "orig.ident", "treatment", "rep", genes)) %>%
         as_tibble(rownames = ".cell_id") %>%
         mutate(tm = .y) %>%
-        pivot_longer(all_of(names(gns)))
+        pivot_longer(all_of(genes))
     }) %>%
                                                      # only use mock data and 8hpi data from 8hpi object
     filter(treatment != "8hpi" | tm != "24hpi") %>%  # exclude 8hpi CHIKV data from 24hpi objects (e.g. so_merge)
@@ -2064,13 +2062,10 @@ so_lec   <- qread(file.path(params$so_dir, "so_lec.qs"))
 so_8     <- qread(file.path(params$so_dir, "so_8.qs"))
 so_24    <- qread(file.path(params$so_dir, "so_24.qs"))
 
-so_merge <- qread(file.path(params$so_dir, "so_merge.qs"))
+so_merge_df <- read_tsv(file.path(params$so_dir, "so_merge.tsv.gz"))
 
-so_merge_df <- so_merge %>%
-  FetchData(c(colnames(so_merge@meta.data), "hUMAP_1", "hUMAP_2")) %>%
-  as_tibble(rownames = "cell_id")
-
-rm(so_merge)
+so_merge_df <- so_merge_df %>%
+  mutate(tm_treat = str_c(tm, "-", treatment))
 ```
 
 ```{r "theme"}
@@ -2201,9 +2196,12 @@ lec_type_cols["other"]      <- "grey50"
 
 old_cols <- lec_type_cols
 
-lec_type_cols["FRC"]   <- old_cols["Valve"]
-lec_type_cols["Valve"] <- old_cols["fLEC"]
-lec_type_cols["fLEC"]  <- old_cols["FRC"]
+lec_type_cols["FRC"]            <- old_cols["Valve"]
+lec_type_cols["Valve"]          <- old_cols["fLEC"]
+lec_type_cols["fLEC"]           <- old_cols["FRC"]
+lec_type_cols["tzLEC"]          <- "black"
+lec_type_cols["BEC"]            <- old_cols["unassigned-LEC"]
+lec_type_cols["unassigned-LEC"] <- old_cols["BEC"]
 
 # CHIKV clusters colors
 grp_cols <- set_names(
