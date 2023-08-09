@@ -42,8 +42,6 @@ knitr::opts_chunk$set(
 knitr::knit(here::here(params$src_dir, "setup.Rmd"), "")
 ```
 
-# Lucas et al. figures
-
 ## Figure 1
 
 Chikungunya virus is found in MARCO-expressing floor lymphatic endothelial cells
@@ -1003,7 +1001,11 @@ create_type_umaps <- function(so_in, data_col, clrs = type_cols, ttl = NULL, ...
   res
 }
 
-all_u <- so_merge %>%
+# Load merged objects containing all cells
+so_merge_df <- so_merge_df %>%
+  mutate(tm_treat = str_c(tm, "-", treatment))
+
+all_u <- so_merge_df %>%
   create_type_umaps(
     "cell_type",
     clrs = type_cols,
@@ -1019,6 +1021,7 @@ lec_u <- so_lec %>%
     size = 0.001
   )
 
+# Create final figure
 plot_grid(
   all_u, lec_u,
   align = "h",
@@ -1684,6 +1687,122 @@ examples_24 <- create_gene_plots(
 
 # gns %>%
 #   filter(grepl("C[xc][clr]|I[fs][irg]", geneID))
+```
+
+```{r "fig 5 UMAPs", fig.width = 12, fig.height = 6}
+create_type_umaps <- function(so_in, data_col, x = "hUMAP_1", y = "hUMAP_2",
+                              clrs = type_cols, ttl = NULL, n_lab = TRUE,
+                              facet_plot = c("tm", "treatment"), ...) {
+  res <- so_in %>%
+    mutate_meta(~ {
+      dat <- .x
+      
+      if (!is.null(facet_plot)) {
+        dat <- dat %>%
+          group_by(!!!syms(facet_plot))
+      }
+      
+      dat %>%
+        mutate(
+          n_lab = label_comma()(n()),
+          n_lab = str_c("n = ", n_lab)
+        ) %>%
+        ungroup() %>%
+        mutate(
+          tm = fct_relevel(tm, c("8hpi", "24hpi")),
+          treatment = fct_relevel(treatment, treats)
+        )
+    })
+  
+  args <- list(
+    input = res,
+    data_col = data_col,
+    x = x,
+    y = y,
+    plot_colors = clrs,
+    ...
+  )
+  
+  args$n_label <- args$n_label %||% "legend"
+  
+  res <- lift_dl(plot_scatter)(args) +
+    ggtitle(ttl) +
+    theme(
+      aspect.ratio = 0.9,
+      plot.margin  = margin(15, 15, 30, 15),
+      axis.title   = element_blank(),
+      axis.text    = element_blank(),
+      axis.ticks   = element_blank(),
+      legend.title = element_blank(),
+      panel.background = element_blank(),
+      plot.title   = element_text(face = "plain", hjust = 0.5),
+      legend.position = "right"
+    )
+  
+  if (n_lab) {
+    res <- res +
+      geom_text(
+        aes(Inf, Inf, label = n_lab),
+        hjust = 1.1, vjust = 1.2, color = "black",
+        check_overlap = TRUE
+      )
+  }
+  
+  if (!is.null(facet_plot)) {
+    frm <- case_with(
+      length(facet_plot) == 1 ~ str_c("~ ", facet_plot),
+      length(facet_plot) > 1  ~ str_c(facet_plot[1:2], collapse = " ~ ")
+    )
+    
+    res <- res +
+      facet_grid(as.formula(frm))
+  }
+  
+  res
+}
+
+# Format UMAP data
+u_lvls <- unique(so_merge_df$tm_treat)
+
+u_clrs <- set_names(
+  ito_cols[seq_along(u_lvls)],
+  u_lvls
+)
+
+# UMAP showing sample groups
+treat_u <- so_merge_df %>%
+  create_type_umaps(
+    "tm_treat",
+    x = "UMAP_1",
+    y = "UMAP_2",
+    size = 0.05,
+    plot_lvls = u_lvls,
+    clrs       = u_clrs,
+    facet_plot = NULL,
+    n_lab = TRUE
+  )
+
+# UMAP showing cell types
+typ_u <- so_merge_df %>%
+  create_type_umaps(
+    "cell_type",
+    x = "UMAP_1",
+    y = "UMAP_2",
+    clrs = type_cols,
+    size = 0.05,
+    facet_plot = NULL,
+    n_lab = TRUE
+  )
+
+# Create final figure
+u_fig <- plot_grid(
+  treat_u, typ_u,
+  align = "h",
+  axis  = "tb",
+  nrow  = 1,
+  labels = c("A", "B"),
+  label_size = ttl_pt2 * 1.5
+)
 ```
 
 ```{r "GO figures", fig.width = 13, fig.height = 12}

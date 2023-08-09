@@ -241,7 +241,8 @@ create_gene_boxplot <- function(input, GENE, TYPE, clr = lec_type_cols[[TYPE]],
           ...,
           p_val    = p,
           size     = txt_pt2 / .pt,
-          line_col = "grey75"
+          line_col = "grey75",
+          add_line = FALSE            #### FIX THIS ####
         )
     })
   
@@ -2059,16 +2060,17 @@ rm(so_merge, so_frc, so_lec, so_8, so_24)
 ```
 
 ```{r "load objects"}
-# so_merge <- qread(file.path(params$so_dir, "so_merge.qs"))
 so_lec   <- qread(file.path(params$so_dir, "so_lec.qs"))
 so_8     <- qread(file.path(params$so_dir, "so_8.qs"))
 so_24    <- qread(file.path(params$so_dir, "so_24.qs"))
+
+so_merge_df <- read_tsv(file.path(params$so_dir, "so_merge.tsv.gz"))
 ```
 
 ```{r "theme"}
 # Set levels for samples and treatments
 sam_lvls <- unique(so_24$orig.ident)
-tms      <- unique(so_merge$tm)
+tms      <- unique(so_merge_df$tm)
 treats   <- unique(treat_key)
 
 # ggplot2 themes
