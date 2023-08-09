@@ -217,44 +217,44 @@ count_bxs <- plot_grid(
 
 
 
-# CALCULATE P-VALUES
-x <- dat %>%
-  filter(chikv_grp == "CHIKV-high")
-
-typs <- table(x$lec_type)
-typs <- names(typs[typs > 2])
-
-typs %>%
-  set_names() %>%
-  map_dfr(~ {
-    x <- x %>%
-      mutate(p_type = ifelse(lec_type == .x, lec_type, "other")) %>%
-      split(.$p_type)
-
-    x <- x[c(.x, "other")]
-    
-    typ_dat <- x[[1]]$tot_pct_CHIKV
-    oth_dat <- x[[2]]$tot_pct_CHIKV
-    
-    # x <- x %>%
-    #   split(.$lec_type)
-    # typ_dat <- x["fLEC"][[1]]$tot_pct_CHIKV
-    # oth_dat <- x[.x][[1]]$tot_pct_CHIKV
-
-    p <- wilcox.test(typ_dat, oth_dat, alternative = "g")
-    p <- tidy(p)
-
-    p %>%
-      mutate(
-        type = .x,
-        n    = length(typ_dat),
-        med  = median(typ_dat),
-        mean = mean(typ_dat),
-        sd   = sd(typ_dat)
-      )
-  }) %>%
-  arrange(p.value) %>%
-  mutate(p_adj = p.adjust(p.value, method = "bonferroni"))
+# # CALCULATE P-VALUES
+# x <- dat %>%
+#   filter(chikv_grp == "CHIKV-high")
+# 
+# typs <- table(x$lec_type)
+# typs <- names(typs[typs > 2])
+# 
+# typs %>%
+#   set_names() %>%
+#   map_dfr(~ {
+#     x <- x %>%
+#       mutate(p_type = ifelse(lec_type == .x, lec_type, "other")) %>%
+#       split(.$p_type)
+# 
+#     x <- x[c(.x, "other")]
+#     
+#     typ_dat <- x[[1]]$tot_pct_CHIKV
+#     oth_dat <- x[[2]]$tot_pct_CHIKV
+#     
+#     # x <- x %>%
+#     #   split(.$lec_type)
+#     # typ_dat <- x["fLEC"][[1]]$tot_pct_CHIKV
+#     # oth_dat <- x[.x][[1]]$tot_pct_CHIKV
+# 
+#     p <- wilcox.test(typ_dat, oth_dat, alternative = "g")
+#     p <- tidy(p)
+# 
+#     p %>%
+#       mutate(
+#         type = .x,
+#         n    = length(typ_dat),
+#         med  = median(typ_dat),
+#         mean = mean(typ_dat),
+#         sd   = sd(typ_dat)
+#       )
+#   }) %>%
+#   arrange(p.value) %>%
+#   mutate(p_adj = p.adjust(p.value, method = "bonferroni"))
 ```
 
 ```{r "fig1 examples", fig.width = 3, fig.height = 5}
@@ -798,12 +798,14 @@ type_heats <- heat_args %>%
 # calculate correlations using combined data for all samples
 
 # Format heatmap data
-h_mat <- so_lec %>%
+h_dat <- so_lec %>%
   mutate_meta(
     mutate,
     lec_type = lec_subtype,
     lec_type = recode(lec_type, unassigned = "unassigned-LEC")
-  ) %>%
+  )
+
+h_mat <- h_dat %>%
   clustify(
     ref_mat        = ref_lec,
     cluster_col    = "lec_type",
@@ -817,8 +819,6 @@ h_mat <- so_lec %>%
     names_to  = "ref_type",
     values_to = "r"
   )
-
-rm(so_lec)
 
 # Format LEC types labels
 typs <- h_dat@meta.data %>%
@@ -845,17 +845,19 @@ type_heats_v2 <- h_mat %>%
 ```{r "type examples extended", fig.width = 10, fig.height = 6.5}
 tms <- c("8hpi", "24hpi")
 
+gns <- c(
+  "Lyve1", "Marco",    # Marco LECs
+  "Madcam1", "Vcam1",  # fLECs
+  "Ptx3",              # Ptx3 LECs
+  "Ackr4"              # cLECs
+)
+
 # Format data
 typ_bx_dat <- list("8hpi" = so_8, "24hpi" = so_24) %>%
   imap_dfr(~ {
-    if (identical(.y, "8hpi")) {
-      .x <- .x %>%
-        mutate_meta(mutate, frc_type = frc_subtype)
-    }
-    
     clmns <- c(
       "cell_type", "lec_type", "frc_type",
-      "treatment", "orig.ident", "rep", "chikv_grp", all_gns
+      "treatment", "orig.ident", "rep", "chikv_grp", gns
     )
     
     .x %>%
@@ -1020,6 +1022,8 @@ lec_u <- so_lec %>%
     ttl  = "Endothelial cell types",
     size = 0.001
   )
+
+rm(so_lec)
 
 # Create final figure
 plot_grid(

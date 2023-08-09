@@ -1111,7 +1111,7 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
                               gns,
                               clrs = c(`1` = "orange"), cell_types = 10,
                               lvls = c("mock", "8hpi", "24hpi"), n_cells = 10,
-                              type_clmn = "subtype", only_show_upreg = TRUE,
+                              type_clmn = "lec_type", only_show_upreg = TRUE,
                               exclude_cell_types = NULL) {
   
   # Genes to plot
@@ -2064,7 +2064,13 @@ so_lec   <- qread(file.path(params$so_dir, "so_lec.qs"))
 so_8     <- qread(file.path(params$so_dir, "so_8.qs"))
 so_24    <- qread(file.path(params$so_dir, "so_24.qs"))
 
-so_merge_df <- read_tsv(file.path(params$so_dir, "so_merge.tsv.gz"))
+so_merge <- qread(file.path(params$so_dir, "so_merge.qs"))
+
+so_merge_df <- so_merge %>%
+  FetchData(c(colnames(so_merge@meta.data), "hUMAP_1", "hUMAP_2")) %>%
+  as_tibble(rownames = "cell_id")
+
+rm(so_merge)
 ```
 
 ```{r "theme"}
