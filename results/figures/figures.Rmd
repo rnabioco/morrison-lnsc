@@ -1585,7 +1585,8 @@ sim_heatmap <- cluster_sim %>%
   djvdj_theme() +
   theme(
     aspect.ratio = 1,
-    axis.title = element_blank()
+    axis.title = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
   )
 ```
 
