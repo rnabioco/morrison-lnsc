@@ -8,6 +8,7 @@ library(patchwork)
 library(cowplot)
 library(colorblindr)
 library(ggtext)
+library(ggforce)
 
 # analysis
 library(Seurat)
@@ -1513,23 +1514,29 @@ enr_counts <- so_enr_df %>%
   mutate(
     across(starts_with("enr_"), ~ replace_na(.x, 0)),
     
-    tot_nCount_CHIKV = nCount_CHIKV + enr_nCount_CHIKV,
-    tot_nCount_RNA   = nCount_RNA + enr_nCount_RNA,
-    tot_pct_CHIKV    = (tot_nCount_CHIKV / tot_nCount_RNA) * 100,
+    enr_pct_CHIKV = (enr_nCount_CHIKV / (enr_nCount_CHIKV + enr_nCount_RNA)) * 100,
+    enr_pct_CHIKV = replace_na(enr_pct_CHIKV, 0),  # some cells have 0 enr counts
     
-    tot_5     = CHIKV_5 + enr_5,
+    tot_nCount_CHIKV = nCount_CHIKV + enr_nCount_CHIKV,
+    tot_nCount_RNA   = nCount_RNA   + enr_nCount_RNA,
+    tot_pct_CHIKV    = (tot_nCount_CHIKV / (tot_nCount_CHIKV + tot_nCount_RNA)) * 100,
+    
+    tot_5     = CHIKV_5     + enr_5,
     tot_sgRNA = CHIKV_sgRNA + enr_sgRNA,
     tot_neg   = CHIKV_neg   + enr_neg
   ) %>%
-  dplyr::select(cell_id, starts_with("tot")) %>%
+  dplyr::select(cell_id, starts_with("tot_"), starts_with("enr_")) %>%
   column_to_rownames("cell_id")
 
 # Add enriched counts to object
+# use enriched counts to identify CHIKV-high, lose 7 cells that have >0
+# unenriched counts but 0 enriched counts
 so <- so %>%
   AddMetaData(enr_counts) %>%
   mutate_meta(
     mutate,
-    chikv_grp = ifelse(tot_nCount_CHIKV > 0, chikv_grps[2], chikv_grps[1])
+    chikv_grp     = ifelse(enr_nCount_CHIKV > 0, chikv_grps[2], chikv_grps[1]),
+    tot_chikv_grp = ifelse(tot_nCount_CHIKV > 0, chikv_grps[2], chikv_grps[1])
   )
 
 # Check that samples are in the same order for the enriched and unenriched objects
@@ -2066,6 +2073,42 @@ so_merge_df <- read_tsv(file.path(params$so_dir, "so_merge.tsv.gz"))
 
 so_merge_df <- so_merge_df %>%
   mutate(tm_treat = str_c(tm, "-", treatment))
+
+
+
+# # Add enriched stats to 8hpi object
+# so_enr_df <- read_tsv(file.path(params$so_dir, "so_enr_8.tsv.gz"))
+# 
+# enr_counts <- so_enr_df %>%
+#   mutate(
+#     cell_id = str_c("8hpi_", cell_id),
+#     
+#     across(starts_with("enr_"), ~ replace_na(.x, 0)),
+#     
+#     enr_pct_CHIKV = (enr_nCount_CHIKV / (enr_nCount_CHIKV + enr_nCount_RNA)) * 100,
+#     enr_pct_CHIKV = replace_na(enr_pct_CHIKV, 0),
+#     
+#     tot_nCount_CHIKV = nCount_CHIKV + enr_nCount_CHIKV,
+#     tot_nCount_RNA   = nCount_RNA + enr_nCount_RNA,
+#     tot_pct_CHIKV    = (tot_nCount_CHIKV / (tot_nCount_CHIKV + tot_nCount_RNA)) * 100,
+#     
+#     tot_5     = CHIKV_5 + enr_5,
+#     tot_sgRNA = CHIKV_sgRNA + enr_sgRNA,
+#     tot_neg   = CHIKV_neg   + enr_neg
+#   ) %>%
+#   dplyr::select(cell_id, starts_with("tot_"), starts_with("enr_")) %>%
+#   column_to_rownames("cell_id")
+# 
+# # Add enriched counts to object
+# # use enriched counts to identify CHIKV-high, lose 7 cells that have >0
+# # unenriched counts but 0 enriched counts
+# so_8 <- so_8 %>%
+#   AddMetaData(enr_counts) %>%
+#   mutate_meta(
+#     mutate,
+#     chikv_grp     = ifelse(enr_nCount_CHIKV > 0, chikv_grps[2], chikv_grps[1]),
+#     tot_chikv_grp = ifelse(tot_nCount_CHIKV > 0, chikv_grps[2], chikv_grps[1])
+#   )
 ```
 
 ```{r "theme"}

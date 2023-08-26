@@ -25,7 +25,7 @@ params:
   lec_res:      10                        # Clustering resolution for annotating LECs
   frc_res:      3                         # Clustering resolution for annotating fibroblasts
 editor_options: 
-  chunk_output_type: console
+  chunk_output_type: inline
 ---
 
 <br>
@@ -54,23 +54,46 @@ D.  The fraction of cells identified as CHIKV+ is shown for each cell type in C.
 E.  MARCO expression is shown for fLECs for mock-infected cells and CHIKV-infected cells classified as either CHIKV low or CHIKV high. P values were calculated using a two-sided Wilcoxon rank-sum test with Bonferroni correction. In the boxplot, the central lines, the box limits, and the whiskers represent medians, the interquartile range (IQR), and min/max values that are not outliers, respectively. Outliers are shown as points and include any values that are more than 1.5× IQR away from the box.
 F.  Madcam1 expression is shown for fLECs as described in E.
 
-```{r "fig 1A", fig.width = 10, fig.height = 10}
+```{r "% CHIKV umap", fig.width = 10, fig.height = 10}
 # Format plot data
+clmn <- c(enr_pct_CHIKV = "CHIKV score")
+
 dat <- so_8@meta.data %>%
-  arrange(tot_pct_CHIKV)
+  arrange(!!sym(names(clmn)))
+
+# Coordinates for circle
+circ_coords <- dat %>%
+  filter(lec_type == "fLEC") %>%
+  summarize(
+    x   = mean(UMAP_1),
+    y   = mean(UMAP_2),
+    rad = diff(range(UMAP_1))
+  )
 
 # Create UMAP
-pseudo <- dat$tot_pct_CHIKV
+pseudo <- dat[[names(clmn)]]
 pseudo <- min(pseudo[pseudo > 0]) / 2
 
 A <- dat %>%
-  ggplot(aes(UMAP_1, UMAP_2, fill = tot_pct_CHIKV + pseudo)) +
+  ggplot(aes(UMAP_1, UMAP_2, fill = !!sym(names(clmn)) + pseudo)) +
   geom_point_trace(
     color = "grey",
     trace_position = "bottom"
   ) +
-  scale_fill_gradientn(colours = c("white", "#D7301F"), trans = "log10", labels = scales::label_number()) +
-  guides(fill = guide_colorbar(title.position = "top", ticks = FALSE, title = "% CHIKV counts")) +
+  geom_circle(
+    aes(x0 = x, y0 = y, r = rad, x = NULL, y = NULL),
+    data      = circ_coords,
+    fill      = NA,
+    color     = "black",
+    linetype  = 2,
+    linewidth = 1
+  ) +
+  scale_fill_gradientn(
+    colours = c("white", "#D7301F"),
+    trans   = "log10",
+    labels  = scales::label_number()
+  ) +
+  guides(fill = guide_colorbar(title.position = "top", ticks = FALSE, title = clmn)) +
   umap_theme +
   theme(
     aspect.ratio         = 0.9,
@@ -84,7 +107,7 @@ A <- dat %>%
   )
 ```
 
-```{r "CHIKV-high cell types", fig.width = 10, fig.height = 10}
+```{r "CHIKV-high umap", fig.width = 10, fig.height = 10}
 # Format plot data
 # ONLY SHOW CELLS WITH >3 CHIKV-HIGH CELLS
 chikv_pos_dat <- so_8@meta.data %>%
@@ -103,7 +126,6 @@ chikv_pos_dat <- chikv_pos_dat %>%
 
 # Create UMAP
 chikv_typs_u <- so_8@meta.data %>%
-  # mutate(lec_type = fct_relevel(lec_type, names(plt_labs))) %>%
   ggplot(aes(UMAP_1, UMAP_2)) +
   geom_point_trace(
     color = "grey",
@@ -111,6 +133,15 @@ chikv_typs_u <- so_8@meta.data %>%
     trace_position = "bottom"
   ) +
   geom_point(aes(color = lec_type), data = chikv_pos_dat) +
+  geom_circle(
+    aes(x0 = x, y0 = y, r = rad, x = NULL, y = NULL),
+    data      = circ_coords,
+    fill      = NA,
+    color     = "black",
+    linetype  = 2,
+    linewidth = 1
+  ) +
+  
   scale_color_manual(values = lec_type_cols, labels = plt_labs) +
   scale_y_discrete(labels = type_lab_fn) +
   guides(color = guide_legend(override.aes = list(size = 4))) +
@@ -128,48 +159,84 @@ chikv_typs_u <- so_8@meta.data %>%
 
 ```{r "8hpi fraction CHIKV-high"}
 # Format plot data
-# ONLY PLOTTING ENRICHED COUNTS
 dat <- so_8@meta.data %>%
   as_tibble(rownames = ".cell_id") %>%
-  filter(treatment == "CHIKV")
+  filter(treatment == treats[2])
 
 # Fraction CHIKV-high cells
-# top cell types with >40 total cells, >3 CHIKV+ cells
 frac_dat <- dat %>%
   group_by(lec_type) %>%
   summarize(
-    n    = length(chikv_grp[chikv_grp == chikv_grps[2]]),
-    tot  = n(),
-    frac = n / tot,
-    .groups = "drop"
+    n         = length(chikv_grp[chikv_grp == chikv_grps[2]]),
+    type_tot  = n(),
+    frac      = n / type_tot,
+    .groups   = "drop"
   ) %>%
-  group_by(lec_type) %>%
   mutate(
-    tot      = sum(tot),
-    tot_frac = sum(n) / tot,
-    n_lab    = label_comma()(tot),
+    n_tot    = sum(n),
+    tot      = sum(type_tot),
+    tot_frac = n_tot / tot,
+    n_lab    = label_comma()(type_tot),
     n_lab    = str_c(lec_type, "\nn = ", n, "/", n_lab),
     n_lab    = str_replace(n_lab, "_", " ")
   ) %>%
-  ungroup() %>%
-  filter(tot > 40, n > 3) %>%
-  mutate(lec_type = fct_reorder(lec_type, tot_frac, max, .desc = TRUE))
-
-frac_lvls <- levels(frac_dat$lec_type)
+  mutate(lec_type = fct_reorder(lec_type, frac, max, .desc = TRUE))
 
 n_lab <- set_names(frac_dat$n_lab, frac_dat$lec_type)
 
+# Hypergeometric test
+# values are arranged by column
+.calc_fisher <- function(...) {
+  res <- c(...) %>%
+    matrix(nrow = 2) %>%
+    as.data.frame() %>%
+    fisher.test() %>%
+    broom::tidy()
+  
+  res$p.value
+}
+
+frac_dat <- frac_dat %>%
+  group_by(lec_type) %>%
+  mutate(
+    type_tot = type_tot - n,
+    n_tot    = n_tot - n,
+    tot      = tot - n_tot - type_tot,
+    p_val    = .calc_fisher(n, type_tot, n_tot, tot)
+  ) %>%
+  ungroup() %>%
+  arrange(p_val) %>%
+  mutate(p_adj = p.adjust(p_val, method = "bonferroni")) %>%
+  rowwise() %>%
+  mutate(p_lab = .format_pvalue(p_adj)) %>%
+  ungroup()
+
+# Create bargraphs
+# Only include cell types with >40 total cells, >3 CHIKV+ cells
+frac_dat <- frac_dat %>%
+  filter(type_tot + n > 40, n > 3)
+
+frac_lvls <- levels(frac_dat$lec_type)
+frac_lvls <- frac_lvls[frac_lvls %in% frac_dat$lec_type]
+
 frac_8 <- frac_dat %>%
-  filter(lec_type %in% frac_lvls) %>%
-  ggplot(aes(lec_type, tot_frac, fill = lec_type, color = lec_type)) +
+  ggplot(aes(lec_type, frac, fill = lec_type, color = lec_type)) +
   geom_col(
-    width = 0.55, size = 1, alpha = 0.5,
+    width = 0.55, linewidth = 1, alpha = 0.5,
     position = position_dodge2(padding = 0.12)
   ) +
+  
+  geom_text(
+    # aes(y = frac + (max(frac) * 0.05), label = p_lab),
+    aes(label = p_lab),
+    data = ~ filter(.x, p_adj < 0.05),
+    color = "black", vjust = -0.3, hjust = 0.4, parse = TRUE
+  ) +
+  
   scale_fill_manual(values = lec_type_cols) +
   scale_color_manual(values = lec_type_cols) +
   scale_x_discrete(labels = n_lab) +
-  scale_y_continuous(breaks = c(0, 0.1, 0.2)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.1), expand = expansion(c(0.05, 0.3))) +
   labs(y = "Fraction\nCHIKV+ cells") +
   base_theme +
   theme(
@@ -180,23 +247,67 @@ frac_8 <- frac_dat %>%
   )
 ```
 
-```{r "8hpi CHIKV counts boxes", fig.width = 10, fig.height = 5}
+```{r "% CHIKV boxes", fig.width = 10, fig.height = 5}
+# Calculate p-values
+# only calculate p-values for cell types included fraction bargraphs
+bx_dat <- dat %>%
+  filter(chikv_grp == chikv_grps[2])
+
+p_dat <- bx_dat %>%
+  filter(lec_type %in% frac_lvls) %>%
+  pull(lec_type) %>%
+  unique() %>%
+  map_dfr(~ {
+    d <- bx_dat %>%
+      mutate(p_type = ifelse(lec_type == .x, lec_type, "other")) %>%
+      split(.$p_type)
+
+    typ_dat <- d[[.x]][[names(clmn)]]
+    oth_dat <- d[["other"]][[names(clmn)]]
+
+    p <- wilcox.test(typ_dat, oth_dat, alternative = "g")
+    p <- tidy(p)
+
+    p %>%
+      mutate(
+        lec_type = .x,
+        n        = length(typ_dat),
+        med      = median(typ_dat),
+        mean     = mean(typ_dat),
+        max      = max(typ_dat),
+        sd       = sd(typ_dat)
+      )
+  }) %>%
+  arrange(p.value) %>%
+  mutate(p_adj = p.adjust(p.value, method = "bonferroni")) %>%
+  filter(p_adj < 0.05) %>%
+  rowwise() %>%
+  mutate(p_lab = .format_pvalue(p_adj)) %>%
+  ungroup()
+
 # Create boxplots
 # Only plot CHIKV-high cells for cell types shown in bargraphs
-count_bxs <- dat %>%
-  filter(chikv_grp == "CHIKV-high", lec_type %in% frac_lvls) %>%
+count_bxs <- bx_dat %>%
+  filter(lec_type %in% frac_lvls) %>%
   mutate(lec_type = fct_relevel(lec_type, frac_lvls)) %>%
-  ggplot(aes(lec_type, tot_pct_CHIKV, fill = lec_type, color = lec_type)) +
+  
+  ggplot(aes(lec_type, !!sym(names(clmn)), fill = lec_type, color = lec_type)) +
   geom_boxplot(
     size = 1, outlier.size = 1.5, outlier.alpha = 1,
     alpha = 0.5, width = 0.55,
     position = position_dodge2(padding = 0.12)
   ) +
-  scale_x_discrete(labels = plt_labs) +
+  
+  geom_text(
+    aes(y = max, label = p_lab),
+    data = p_dat,
+    color = "black", vjust = -1, hjust = 0.4, parse = TRUE
+  ) +
+  
   scale_y_continuous(expand = expansion(c(0.05, 0.2)), trans = "log10") +
   scale_fill_manual(values = lec_type_cols) +
   scale_color_manual(values = lec_type_cols) +
-  labs(y = "% CHIKV counts") +
+  labs(y = clmn) +
   base_theme +
   theme(
     plot.margin     = margin(5, 5, 5, 35),
@@ -217,44 +328,17 @@ count_bxs <- plot_grid(
 
 
 
-# # CALCULATE P-VALUES
-# x <- dat %>%
-#   filter(chikv_grp == "CHIKV-high")
+# 84/191	632/15076	6.588999771563824e-65
 # 
-# typs <- table(x$lec_type)
-# typs <- names(typs[typs > 2])
-# 
-# typs %>%
-#   set_names() %>%
-#   map_dfr(~ {
-#     x <- x %>%
-#       mutate(p_type = ifelse(lec_type == .x, lec_type, "other")) %>%
-#       split(.$p_type)
-# 
-#     x <- x[c(.x, "other")]
-#     
-#     typ_dat <- x[[1]]$tot_pct_CHIKV
-#     oth_dat <- x[[2]]$tot_pct_CHIKV
-#     
-#     # x <- x %>%
-#     #   split(.$lec_type)
-#     # typ_dat <- x["fLEC"][[1]]$tot_pct_CHIKV
-#     # oth_dat <- x[.x][[1]]$tot_pct_CHIKV
-# 
-#     p <- wilcox.test(typ_dat, oth_dat, alternative = "g")
-#     p <- tidy(p)
-# 
-#     p %>%
-#       mutate(
-#         type = .x,
-#         n    = length(typ_dat),
-#         med  = median(typ_dat),
-#         mean = mean(typ_dat),
-#         sd   = sd(typ_dat)
-#       )
-#   }) %>%
-#   arrange(p.value) %>%
-#   mutate(p_adj = p.adjust(p.value, method = "bonferroni"))
+# data.frame(
+#   up    = c(84, 191 - 84),
+#   other = c(632, 15076 - 632),
+#   row.names = c("in_term", "out_term")
+# ) %>%
+#   t() %>%
+#   # chisq.test() %>%
+#   fisher.test(alternative = "t") %>%
+#   tidy()
 ```
 
 ```{r "fig1 examples", fig.width = 3, fig.height = 5}
@@ -281,6 +365,7 @@ madcam_bxs <- plt_dat %>%
     GENE = "Madcam1", TYPE = "fLEC",
     clr = "#E69F00", lvls = plt_lvls
   )
+
 
 
 # # CHECK FOR CONTAMINATING fLEC CLUSTERS
@@ -327,14 +412,11 @@ top <- plot_grid(
 )
 
 bot <- plot_grid(
-  # count_bxs, NULL, marco_bxs, NULL, marco_bxs_2, NULL, madcam_bxs, NULL,
-  # labels = c("", "", "E", "", "", "", "F"),
-  # rel_widths = c(0.8, 0.05, 0.36, 0.05, 0.36, 0.05, 0.36, 0.5)
   count_bxs, NULL, marco_bxs, NULL, madcam_bxs, NULL,
   labels = c("", "", "E", "", "F"),
   label_size = ttl_pt2 * 1.5,
   nrow   = 1,
-  rel_widths = c(1.2, 0.05, 0.36, 0.05, 0.36, 0.2)
+  rel_widths = c(1, 0.05, 0.36, 0.05, 0.36, 0.4)
 )
 
 plot_grid(
@@ -342,6 +424,90 @@ plot_grid(
   ncol = 1,
   rel_heights = c(1, 0.05, 0.7)
 )
+```
+
+<br>
+
+### Marco/Mxra8 expression
+
+Mxra8 expression is shown for CHIKV+/- cells for the 8 hpi timepoint. Mxra8 expression appears to be higher in CHIKV+ FRCs and BECs, suggesting a distinct mechanism of CHIKV entry. This is a result we have discussed previously, and might be good to include in a supplemental figure.
+
+```{r, fig.width = 6, fig.height = 5}
+
+lec_type_cols[c("FRC", "BEC")] %>%
+  imap(~ {
+    plt_dat %>%
+      create_gene_boxplot(
+        GENE = "Mxra8", TYPE = .y,
+        clr = .x, lvls = plt_lvls
+      )
+  }) %>%
+  plot_grid(plotlist = .)
+
+```
+
+Marco and Mxra8 expression is shown for CHIKV-high/low cells for the 24 hpi timepoint. Using the updated cell type annotations, we still observe increased Marco expression for CHIKV-high Marco LECs. There is no difference in Mxra8 expression for CHIKV-high FRCs and BECs at 24 hpi.
+
+```{r, fig.width = 11, fig.height = 5}
+
+plts <- lec_type_cols[c("FRC", "BEC")] %>%
+  imap(~ {
+    so_24 %>%
+      create_gene_boxplot(
+        GENE = "Mxra8", TYPE = .y,
+        clr = .x
+      )
+  })
+
+so_24 %>%
+  create_gene_boxplot(
+    GENE = "Marco", TYPE = "Marco_LEC",
+    clr = lec_type_cols[["Marco_LEC"]]
+  ) %>%
+  list() %>%
+  append(plts) %>%
+  plot_grid(plotlist = ., nrow = 1)
+
+```
+
+<br>
+
+### Enriched counts
+
+The CHIKV score shown in figures 1A and C is calculated by dividing CHIKV counts from the CHIKV-capture library by total mouse counts from the CHIKV-capture library for each cell. For this calculation we are assuming that mouse counts from the capture library reflect relative mouse counts from the original libraries.
+
+There is a strong correlation between counts from the capture and original libraries, this validates the use of mouse counts from the capture libraries as a normalization factor.
+
+```{r, fig.width = 6, fig.height = 6}
+cnt_dat <- plt_dat@meta.data %>%
+  mutate(treatment = fct_relevel(treatment, treats))
+
+axis_labs <- c(
+  nCount_RNA     = "Mouse counts",
+  enr_nCount_RNA = "Mouse counts\nCHIKV-enriched libraries"
+)
+
+lab_dat <- cnt_dat %>%
+  group_by(rep, treatment) %>%
+  summarize(
+    n = str_c("n = ", label_comma()(n())),
+    .groups = "drop"
+  )
+
+cnt_dat %>%
+  ggplot(aes(!!sym(names(axis_labs)[1]), !!sym(names(axis_labs)[2]))) +
+  geom_point() +
+  geom_smooth(method = "lm", formula = y ~ x) +
+  geom_text(
+    aes(x = Inf, y = Inf, label = n),
+    data  = lab_dat,
+    hjust = 1.2,
+    vjust = 1.5
+  ) +
+  labs(x = axis_labs[1], y = axis_labs[2]) +
+  facet_grid(rep ~ treatment) +
+  djvdj_theme() +
+  theme(aspect.ratio = 1)
 ```
 
 ---
@@ -927,6 +1093,8 @@ plot_grid(
   ncol        = 1
 )
 ```
+
+<br>
 
 ### V2
 
