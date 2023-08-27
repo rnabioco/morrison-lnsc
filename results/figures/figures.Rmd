@@ -167,43 +167,27 @@ dat <- so_8@meta.data %>%
 frac_dat <- dat %>%
   group_by(lec_type) %>%
   summarize(
-    n         = length(chikv_grp[chikv_grp == chikv_grps[2]]),
+    type_n    = length(chikv_grp[chikv_grp == chikv_grps[2]]),
     type_tot  = n(),
-    frac      = n / type_tot,
+    type_frac = type_n / type_tot,
     .groups   = "drop"
   ) %>%
   mutate(
-    n_tot    = sum(n),
-    tot      = sum(type_tot),
-    tot_frac = n_tot / tot,
-    n_lab    = label_comma()(type_tot),
-    n_lab    = str_c(lec_type, "\nn = ", n, "/", n_lab),
-    n_lab    = str_replace(n_lab, "_", " ")
+    n     = sum(type_n),
+    tot   = sum(type_tot),
+    frac  = n / tot,
+    n_lab = label_comma()(type_tot),
+    n_lab = str_c(lec_type, "\nn = ", type_n, "/", n_lab),
+    n_lab = str_replace(n_lab, "_", " ")
   ) %>%
-  mutate(lec_type = fct_reorder(lec_type, frac, max, .desc = TRUE))
+  mutate(lec_type = fct_reorder(lec_type, type_frac, max, .desc = TRUE))
 
 n_lab <- set_names(frac_dat$n_lab, frac_dat$lec_type)
 
-# Hypergeometric test
-# values are arranged by column
-.calc_fisher <- function(...) {
-  res <- c(...) %>%
-    matrix(nrow = 2) %>%
-    as.data.frame() %>%
-    fisher.test() %>%
-    broom::tidy()
-  
-  res$p.value
-}
-
+# Perform hypergeometric test
 frac_dat <- frac_dat %>%
   group_by(lec_type) %>%
-  mutate(
-    type_tot = type_tot - n,
-    n_tot    = n_tot - n,
-    tot      = tot - n_tot - type_tot,
-    p_val    = .calc_fisher(n, type_tot, n_tot, tot)
-  ) %>%
+  mutate(p_val = .calc_fisher(type_n, type_tot, n, tot - n)) %>%
   ungroup() %>%
   arrange(p_val) %>%
   mutate(p_adj = p.adjust(p_val, method = "bonferroni")) %>%
@@ -214,20 +198,19 @@ frac_dat <- frac_dat %>%
 # Create bargraphs
 # Only include cell types with >40 total cells, >3 CHIKV+ cells
 frac_dat <- frac_dat %>%
-  filter(type_tot + n > 40, n > 3)
+  filter(type_tot > 40, type_n > 3)
 
 frac_lvls <- levels(frac_dat$lec_type)
 frac_lvls <- frac_lvls[frac_lvls %in% frac_dat$lec_type]
 
 frac_8 <- frac_dat %>%
-  ggplot(aes(lec_type, frac, fill = lec_type, color = lec_type)) +
+  ggplot(aes(lec_type, type_frac, fill = lec_type, color = lec_type)) +
   geom_col(
     width = 0.55, linewidth = 1, alpha = 0.5,
     position = position_dodge2(padding = 0.12)
   ) +
   
   geom_text(
-    # aes(y = frac + (max(frac) * 0.05), label = p_lab),
     aes(label = p_lab),
     data = ~ filter(.x, p_adj < 0.05),
     color = "black", vjust = -0.3, hjust = 0.4, parse = TRUE
@@ -245,6 +228,16 @@ frac_8 <- frac_dat %>%
     axis.title.x = element_blank(),
     legend.position = "none",
   )
+
+
+
+# # To plot density for hypergeometric distribution for fLECs
+# dhyper(
+#   x = 1:23,  # number of white balls drawn
+#   m = 267,   # number of white balls in urn
+#   n = 3286,  # number of black balls in urn
+#   k = 74     # number of balls drawn
+# )
 ```
 
 ```{r "% CHIKV boxes", fig.width = 10, fig.height = 5}
@@ -265,7 +258,7 @@ p_dat <- bx_dat %>%
     typ_dat <- d[[.x]][[names(clmn)]]
     oth_dat <- d[["other"]][[names(clmn)]]
 
-    p <- wilcox.test(typ_dat, oth_dat, alternative = "g")
+    p <- wilcox.test(typ_dat, oth_dat, alternative = "greater")
     p <- tidy(p)
 
     p %>%
@@ -341,7 +334,7 @@ count_bxs <- plot_grid(
 #   tidy()
 ```
 
-```{r "fig1 examples", fig.width = 3, fig.height = 5}
+```{r "fig 1 examples", fig.width = 3, fig.height = 5}
 plt_dat <- so_8 %>%
   mutate_meta(
     mutate,
@@ -497,7 +490,7 @@ lab_dat <- cnt_dat %>%
 cnt_dat %>%
   ggplot(aes(!!sym(names(axis_labs)[1]), !!sym(names(axis_labs)[2]))) +
   geom_point() +
-  geom_smooth(method = "lm", formula = y ~ x) +
+  geom_smooth(method = "lm", formula = y ~ x, linetype = 2) +
   geom_text(
     aes(x = Inf, y = Inf, label = n),
     data  = lab_dat,
@@ -765,44 +758,72 @@ scatter <- scatter %>%
 # Format plot data
 # only include cell types with >40 cells
 plt_dat <- dat %>%
-  filter(treatment == treats[2]) %>%
-  group_by(lec_type) %>%
-  filter(n() > 40) %>%
-  ungroup()
+  filter(treatment == treats[2])
 
 # Fraction CHIKV-high cells
 frac_dat <- plt_dat %>%
   group_by(lec_type, rep) %>%
   summarize(
-    n = length(chikv_grp[chikv_grp == chikv_grps[2]]),
-    tot = n(),
-    frac = n / tot,
-    .groups = "drop"
+    rep_n    = length(chikv_grp[chikv_grp == chikv_grps[2]]),
+    rep_tot  = n(),
+    rep_frac = rep_n / rep_tot,
+    .groups  = "drop"
   ) %>%
   group_by(lec_type) %>%
   mutate(
-    tot      = sum(tot),
-    tot_n    = sum(n),
-    tot_frac = tot_n / tot,
-    n_lab    = label_comma()(tot),
-    n_lab    = str_c(lec_type, "\nn = ", tot_n, "/", n_lab),
-    n_lab    = str_replace(n_lab, "_", " ")
+    type_tot  = sum(rep_tot),
+    type_n    = sum(rep_n),
+    type_frac = type_n / type_tot,
+    n_lab     = label_comma()(type_tot),
+    n_lab     = str_c(lec_type, "\nn = ", type_n, "/", n_lab),
+    n_lab     = str_replace(n_lab, "_", " ")
   ) %>%
-  filter(sum(n) > 3) %>%
   ungroup() %>%
-  mutate(lec_type = fct_reorder(lec_type, frac, max, .desc = TRUE))
+  mutate(
+    tot      = sum(rep_tot),
+    n        = sum(rep_n),
+    frac     = n / tot,
+    lec_type = fct_reorder(lec_type, type_frac, max, .desc = TRUE)
+  )
 
-n_lab <- set_names(frac_dat$n_lab, frac_dat$lec_type)
+# Perform hypergeometric test
+p_dat <- frac_dat %>%
+  group_by(lec_type, type_n, type_tot, tot, n, n_lab) %>%
+  summarize(rep_frac = max(rep_frac), .groups = "drop") %>%
+  group_by(lec_type) %>%
+  mutate(p_val = .calc_fisher(type_n, type_tot, n, tot - n)) %>%
+  ungroup() %>%
+  arrange(p_val) %>%
+  mutate(p_adj = p.adjust(p_val, method = "bonferroni")) %>%
+  rowwise() %>%
+  mutate(p_lab = .format_pvalue(p_adj)) %>%
+  ungroup() %>%
+  filter(p_adj < 0.05)
+
+# Create bargraphs
+# Only include cell types with >40 total cells, >3 CHIKV-high cells
+n_lab <- set_names(p_dat$n_lab, p_dat$lec_type)
 
 frac_24 <- frac_dat %>%
-  ggplot(aes(lec_type, frac, fill = lec_type, color = lec_type)) +
+  filter(type_tot > 40, type_n > 3) %>%
+  ggplot(aes(lec_type, rep_frac, fill = lec_type, color = lec_type)) +
   geom_col(
     position = position_dodge2(padding = 0.12),
     alpha = 0.5
   ) +
+  
+  geom_text(
+    aes(label = p_lab),
+    data  = p_dat,
+    color = "black", vjust = -1, hjust = 0.4,
+    size = 8 / .pt,
+    parse = TRUE
+  ) +
+  
   scale_fill_manual(values = lec_type_cols) +
   scale_color_manual(values = lec_type_cols) +
   scale_x_discrete(labels = n_lab) +
+  scale_y_continuous(expand = expansion(c(0.05, 0.3))) +
   labs(y = "Fraction\nCHIKV-high cells") +
   base_theme +
   theme(
@@ -910,7 +931,6 @@ right <- plot_grid(
 bot <- plot_grid(
   left, right,
   labels = c("", "E"), label_size = ttl_pt2 * 1.5,
-  # rel_widths = c(0.75, 1),
   nrow = 1
 )
 
@@ -929,10 +949,154 @@ plot_grid(
 
 ## Figure S3
 
-A.  The correlation between annotated LEC subsets and reference data is shown for the 8 hpi and 24 hpi timepoint.
-B.  The expression of select marker genes is shown for the 8 hpi and 24 hpi timepoints.
+This is an alternate version of fig S3 that includes UMAPs showing the
+integrated projections used for annotating cell types.
 
-```{r "cell type heatmaps v1", fig.width = 8, fig.height = 5}
+A.  UMAP projection shows cell type annotations for integrated data.
+B.  UMAP projection shows endothelial cell type annotations for integrated endothelial cell data.
+C.  The correlation between annotated endothelial subsets and reference data is shown.
+D.  The expression of select marker genes is shown for the 8 hpi and 24 hpi timepoints.
+
+```{r "fig S3 cell type UMAPs", fig.width = 12, fig.height = 6}
+create_type_umaps <- function(so_in, data_col, clrs = type_cols, ttl = NULL, ...) {
+  res <- so_in %>%
+    mutate_meta(~ {
+      .x %>%
+        group_by(tm, treatment) %>%
+        mutate(
+          n_lab = label_comma()(n()),
+          n_lab = str_c("n = ", n_lab)
+        ) %>%
+        ungroup() %>%
+        mutate(
+          tm = fct_relevel(tm, c("8hpi", "24hpi")),
+          treatment = fct_relevel(treatment, treats)
+        )
+    }) %>%
+    plot_scatter(
+      data_col,
+      x = "hUMAP_1",
+      y = "hUMAP_2",
+      n_label     = "legend",
+      plot_colors = clrs,
+      ...
+    ) + 
+    geom_text(
+      aes(Inf, Inf, label = n_lab),
+      hjust = 1.1, vjust = 1.2, color = "black",
+      check_overlap = TRUE
+    ) +
+    facet_grid(tm ~ treatment) +
+    ggtitle(ttl) +
+    theme(
+      aspect.ratio = 0.8,
+      axis.title   = element_blank(),
+      axis.text    = element_blank(),
+      axis.ticks   = element_blank(),
+      legend.title = element_blank(),
+      plot.title   = element_text(face = "plain", hjust = 0.5),
+      legend.position = "bottom"
+    )
+  
+  res
+}
+
+# Load merged objects containing all cells
+all_u <- so_merge_df %>%
+  create_type_umaps(
+    "cell_type",
+    clrs = type_cols,
+    ttl  = "Cell types",
+    size = 0.001
+  )
+
+lec_u <- so_lec %>%
+  create_type_umaps(
+    "lec_subtype",
+    clrs = lec_type_cols,
+    ttl  = "Endothelial cell types",
+    size = 0.001
+  )
+
+# Create final figure
+type_fig <- plot_grid(
+  all_u, lec_u,
+  align = "h",
+  axis  = "tb",
+  nrow  = 1,
+  labels = c("A", "B"),
+  label_size  = ttl_pt2 * 1.5
+)
+```
+
+```{r "fig S3 cell type", fig.width = 12, fig.height = 18}
+plot_grid(
+  type_heats, NULL, type_boxes,
+  rel_heights = c(0.7, 0.04, 1),
+  label_size  = ttl_pt2 * 1.5,
+  labels      = c("A", "B"),
+  ncol        = 1
+)
+```
+
+```{r "fig S3 cell type heatmaps", fig.width = 8, fig.height = 5}
+# Alternate version of cell type heatmaps
+# calculate correlations using combined data for all samples
+
+# Format heatmap data
+h_dat <- so_lec %>%
+  mutate_meta(
+    mutate,
+    lec_type = lec_subtype,
+    lec_type = recode(lec_type, unassigned = "unassigned-LEC")
+  )
+
+rm(so_lec)
+
+h_mat <- h_dat %>%
+  clustify(
+    ref_mat        = ref_lec,
+    cluster_col    = "lec_type",
+    seurat_out     = FALSE,
+    compute_method = "spearman",
+    n_genes        = 2000
+  ) %>%
+  as_tibble(rownames = "assigned_type") %>%
+  pivot_longer(
+    cols      = -assigned_type,
+    names_to  = "ref_type",
+    values_to = "r"
+  )
+
+# Format LEC types labels
+typs <- h_dat@meta.data %>%
+  group_by(lec_type) %>%
+  dplyr::filter(n() > 10) %>%
+  pull(lec_type) %>%
+  unique()
+
+lec_labs <- h_dat %>%
+  subset(lec_type %in% typs) %>%
+  get_nlab_fun("lec_type", l = "\n", r = "")
+  
+# Create heatmaps
+heat_args <- list(
+  df_in    = h_mat,
+  ttl      = names(h_mat),
+  lec_labs = lec_labs
+)
+
+type_heats_v2 <- h_mat %>%
+  create_cor_heatmap(ln_clr = fade_0)
+
+type_heats_v2 <- plot_grid(
+  type_heats_v2, NULL,
+  labels     = c("C", ""),
+  label_size = ttl_pt2 * 1.5
+)
+```
+
+```{r "fig S3 cell type heatmaps OLD", fig.width = 8, fig.height = 5, eval = FALSE}
 # Format heatmap data
 h_dat <- so_lec %>%
   SplitObject("tm") %>%
@@ -995,7 +1159,7 @@ type_heats <- heat_args %>%
   plot_grid(plotlist = .)
 ```
 
-```{r "type examples extended", fig.width = 10, fig.height = 6.5}
+```{r "fig S3 type examples extended", fig.width = 10, fig.height = 6.5}
 tms <- c("8hpi", "24hpi")
 
 gns <- c(
@@ -1084,158 +1248,7 @@ type_boxes <- gns %>%
   )
 ```
 
-```{r "fig S1 cell type", fig.width = 12, fig.height = 18}
-plot_grid(
-  type_heats, NULL, type_boxes,
-  rel_heights = c(0.7, 0.04, 1),
-  label_size  = ttl_pt2 * 1.5,
-  labels      = c("A", "B"),
-  ncol        = 1
-)
-```
-
-<br>
-
-### V2
-
-This is an alternate version of fig S3 that includes UMAPs showing the
-integrated projections used for annotating cell types.
-
-A.  UMAP projection shows cell type annotations for integrated data.
-B.  UMAP projection shows endothelial cell type annotations for integrated endothelial cell data.
-C.  The correlation between annotated endothelial subsets and reference data is shown.
-D.  The expression of select marker genes is shown for the 8 hpi and 24 hpi timepoints.
-
-```{r "fig S1 cell type UMAPs", fig.width = 12, fig.height = 6}
-create_type_umaps <- function(so_in, data_col, clrs = type_cols, ttl = NULL, ...) {
-  res <- so_in %>%
-    mutate_meta(~ {
-      .x %>%
-        group_by(tm, treatment) %>%
-        mutate(
-          n_lab = label_comma()(n()),
-          n_lab = str_c("n = ", n_lab)
-        ) %>%
-        ungroup() %>%
-        mutate(
-          tm = fct_relevel(tm, c("8hpi", "24hpi")),
-          treatment = fct_relevel(treatment, treats)
-        )
-    }) %>%
-    plot_scatter(
-      data_col,
-      x = "hUMAP_1",
-      y = "hUMAP_2",
-      n_label     = "legend",
-      plot_colors = clrs,
-      ...
-    ) + 
-    geom_text(
-      aes(Inf, Inf, label = n_lab),
-      hjust = 1.1, vjust = 1.2, color = "black",
-      check_overlap = TRUE
-    ) +
-    facet_grid(tm ~ treatment) +
-    ggtitle(ttl) +
-    theme(
-      aspect.ratio = 0.8,
-      axis.title   = element_blank(),
-      axis.text    = element_blank(),
-      axis.ticks   = element_blank(),
-      legend.title = element_blank(),
-      plot.title   = element_text(face = "plain", hjust = 0.5),
-      legend.position = "bottom"
-    )
-  
-  res
-}
-
-# Load merged objects containing all cells
-all_u <- so_merge_df %>%
-  create_type_umaps(
-    "cell_type",
-    clrs = type_cols,
-    ttl  = "Cell types",
-    size = 0.001
-  )
-
-lec_u <- so_lec %>%
-  create_type_umaps(
-    "lec_subtype",
-    clrs = lec_type_cols,
-    ttl  = "Endothelial cell types",
-    size = 0.001
-  )
-
-# Create final figure
-type_fig <- plot_grid(
-  all_u, lec_u,
-  align = "h",
-  axis  = "tb",
-  nrow  = 1,
-  labels = c("A", "B"),
-  label_size  = ttl_pt2 * 1.5
-)
-```
-
-```{r "cell type heatmaps v2", fig.width = 8, fig.height = 5}
-# Alternate version of cell type heatmaps
-# calculate correlations using combined data for all samples
-
-# Format heatmap data
-h_dat <- so_lec %>%
-  mutate_meta(
-    mutate,
-    lec_type = lec_subtype,
-    lec_type = recode(lec_type, unassigned = "unassigned-LEC")
-  )
-
-rm(so_lec)
-
-h_mat <- h_dat %>%
-  clustify(
-    ref_mat        = ref_lec,
-    cluster_col    = "lec_type",
-    seurat_out     = FALSE,
-    compute_method = "spearman",
-    n_genes        = 2000
-  ) %>%
-  as_tibble(rownames = "assigned_type") %>%
-  pivot_longer(
-    cols      = -assigned_type,
-    names_to  = "ref_type",
-    values_to = "r"
-  )
-
-# Format LEC types labels
-typs <- h_dat@meta.data %>%
-  group_by(lec_type) %>%
-  dplyr::filter(n() > 10) %>%
-  pull(lec_type) %>%
-  unique()
-
-lec_labs <- h_dat %>%
-  subset(lec_type %in% typs) %>%
-  get_nlab_fun("lec_type", l = "\n", r = "")
-  
-# Create heatmaps
-heat_args <- list(
-  df_in    = h_mat,
-  ttl      = names(h_mat),
-  lec_labs = lec_labs
-)
-
-type_heats_v2 <- h_mat %>%
-  create_cor_heatmap(ln_clr = fade_0)
-
-type_heats_v2 <- plot_grid(
-  type_heats_v2, NULL,
-  labels     = c("C", ""),
-  label_size = ttl_pt2 * 1.5
-)
-```
-
-```{r "fig S1 cell type v2", fig.width = 12, fig.height = 20}
+```{r "fig S3 cell type", fig.width = 12, fig.height = 20}
 plot_grid(
   type_fig, NULL, type_heats_v2, NULL, type_boxes,
   rel_heights = c(0.7, 0.04, 0.4, 0.04, 1.2),

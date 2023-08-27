@@ -164,6 +164,29 @@ get_cell_types <- function(so_in, type_clmn, sample_clmn, n_cells = 3) {
   res
 }
 
+#' Run hypergeometric test
+#' 
+#' Arguments match those used for dhyper()
+#' 
+#' @param x number of white balls drawn
+#' @param k number of total balls drawn
+#' @param m number of white balls in urn
+#' @param n number of black balls in urn
+#' @param alt alternative hypothesis, 'greater' tests whether more white balls
+#' were drawn than expected
+#' @export
+.calc_fisher <- function(x, k, m, n, alt = "greater") {
+  k <- k - x
+  m <- m - x
+  n <- n - k
+  
+  res <- c(x, k, m, n) %>%
+    matrix(nrow = 2) %>%
+    fisher.test(alternative = alt)
+  
+  res$p.value
+}
+
 
 # Processing helpers ----
 
