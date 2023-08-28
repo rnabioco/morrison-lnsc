@@ -1292,9 +1292,9 @@ bar_gd <- function(wdth = unit(0.15, "cm"), color = "black", ln_wdth = 0.3, ttl 
 #' @param ... Additional arguments to pass to geom_text.
 #' @return ggplot object.
 #' @export
-add_pvals <- function(gg_in, x, xend, y, p_val, prefix = "", format_p = TRUE,
-                      digits = 2, add_line = TRUE, scale_line = 0.1, line_size = 0.1,
-                      line_col = "black", line_type = 1, ...) {
+add_pvals <- function(gg_in, x, xend, y, p_y = y + (y * 0.07), p_val, prefix = "", format_p = TRUE,
+                      digits = 2, add_line = TRUE, scale_line = 0.1,
+                      line_size = 0.1, line_col = "black", line_type = 1, ...) {
   
   p   <- p_val
   prs <- TRUE
@@ -1330,11 +1330,11 @@ add_pvals <- function(gg_in, x, xend, y, p_val, prefix = "", format_p = TRUE,
     unique()
   
   if (is.character(x)) {
-    x <- grep(x, x_lvls, fixed = TRUE)
+    x <- match(x, x_lvls)
   }
   
   if (is.character(xend)) {
-    xend <- grep(xend, x_lvls, fixed = TRUE)
+    xend <- match(xend, x_lvls)
   }
   
   x_mid   <- median(c(x, xend))
@@ -1346,7 +1346,7 @@ add_pvals <- function(gg_in, x, xend, y, p_val, prefix = "", format_p = TRUE,
   # Add label
   res <- gg_in +
     geom_text(
-      aes(x_mid, y + (y * 0.07)),
+      aes(x_mid, p_y),
       label         = p,
       parse         = prs,
       check_overlap = TRUE,

@@ -25,7 +25,7 @@ params:
   lec_res:      10                        # Clustering resolution for annotating LECs
   frc_res:      3                         # Clustering resolution for annotating fibroblasts
 editor_options: 
-  chunk_output_type: inline
+  chunk_output_type: console
 ---
 
 <br>
@@ -86,7 +86,7 @@ A <- dat %>%
     fill      = NA,
     color     = "black",
     linetype  = 2,
-    linewidth = 1
+    linewidth = 0.75
   ) +
   scale_fill_gradientn(
     colours = c("white", "#D7301F"),
@@ -139,7 +139,7 @@ chikv_typs_u <- so_8@meta.data %>%
     fill      = NA,
     color     = "black",
     linetype  = 2,
-    linewidth = 1
+    linewidth = 0.75
   ) +
   
   scale_color_manual(values = lec_type_cols, labels = plt_labs) +
@@ -224,7 +224,7 @@ frac_8 <- frac_dat %>%
   base_theme +
   theme(
     axis.text.y = element_text(size = txt_pt1),
-    axis.text.x = element_text(size = ttl_pt2, angle = 45, hjust = 1),
+    axis.text.x = element_text(size = ttl_pt1, angle = 45, hjust = 1),
     axis.title.x = element_blank(),
     legend.position = "none",
   )
@@ -423,11 +423,10 @@ plot_grid(
 
 ### Marco/Mxra8 expression
 
-Mxra8 expression is shown for CHIKV+/- cells for the 8 hpi timepoint. Mxra8 expression appears to be higher in CHIKV+ FRCs and BECs, suggesting a distinct mechanism of CHIKV entry. This is a result we have discussed previously, and might be good to include in a supplemental figure.
+Mxra8 expression is shown for CHIKV+/- cells for the 8 hpi timepoint. Mxra8 expression appears to be higher in CHIKV+ FRCs and BECs, suggesting a distinct mechanism of CHIKV entry. This is a result we have discussed previously, and could be included in a supplemental figure.
 
-```{r, fig.width = 6, fig.height = 5}
-
-lec_type_cols[c("FRC", "BEC")] %>%
+```{r, fig.width = 12, fig.height = 5}
+lec_type_cols[c("Marco_LEC", "FRC", "BEC")] %>%
   imap(~ {
     plt_dat %>%
       create_gene_boxplot(
@@ -435,14 +434,12 @@ lec_type_cols[c("FRC", "BEC")] %>%
         clr = .x, lvls = plt_lvls
       )
   }) %>%
-  plot_grid(plotlist = .)
-
+  plot_grid(plotlist = ., nrow = 1)
 ```
 
 Marco and Mxra8 expression is shown for CHIKV-high/low cells for the 24 hpi timepoint. Using the updated cell type annotations, we still observe increased Marco expression for CHIKV-high Marco LECs. There is no difference in Mxra8 expression for CHIKV-high FRCs and BECs at 24 hpi.
 
-```{r, fig.width = 11, fig.height = 5}
-
+```{r, fig.width = 12, fig.height = 5}
 plts <- lec_type_cols[c("FRC", "BEC")] %>%
   imap(~ {
     so_24 %>%
@@ -460,7 +457,6 @@ so_24 %>%
   list() %>%
   append(plts) %>%
   plot_grid(plotlist = ., nrow = 1)
-
 ```
 
 <br>
@@ -754,7 +750,7 @@ scatter <- scatter %>%
 # )
 ```
 
-```{r "sgRNA signal"}
+```{r "fracion CHIKV-high"}
 # Format plot data
 # only include cell types with >40 cells
 plt_dat <- dat %>%
@@ -797,8 +793,7 @@ p_dat <- frac_dat %>%
   mutate(p_adj = p.adjust(p_val, method = "bonferroni")) %>%
   rowwise() %>%
   mutate(p_lab = .format_pvalue(p_adj)) %>%
-  ungroup() %>%
-  filter(p_adj < 0.05)
+  ungroup()
 
 # Create bargraphs
 # Only include cell types with >40 total cells, >3 CHIKV-high cells
@@ -814,7 +809,7 @@ frac_24 <- frac_dat %>%
   
   geom_text(
     aes(label = p_lab),
-    data  = p_dat,
+    data = filter(p_dat, p_adj < 0.05),
     color = "black", vjust = -1, hjust = 0.4,
     size = 8 / .pt,
     parse = TRUE
@@ -828,20 +823,22 @@ frac_24 <- frac_dat %>%
   base_theme +
   theme(
     axis.text.y = element_text(size = txt_pt1),
-    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.x = element_text(size = txt_pt2, angle = 45, hjust = 1),
     axis.title.x = element_blank(),
     legend.position = "none",
     aspect.ratio = 0.25,
     plot.margin = margin(25, 5, 5, 15)
   )
+```
 
-# sgRNA ratio
+```{r "sgRNA ratio violins"}
+# Format sgRNA ratio data
 # Only include cell types with >40 cells
-# For figure S1B a pseudo count of 1 was added to both sgRNA and 5' counts to
+# For figure S2B a pseudo count of 1 was added to both sgRNA and 5' counts to
 # eliminate division by zero
 # For violin plots do not need to add pseudo count since we are filtering to
 # remove cells with 0 counts
-sgRNA_boxes <- plt_dat %>%
+bx_dat <- plt_dat %>%
   filter(
     CHIKV_sgRNA > 0,
     CHIKV_5 > 0
@@ -851,16 +848,30 @@ sgRNA_boxes <- plt_dat %>%
   ) %>%
   group_by(lec_type) %>%
   filter(n() > 40) %>%
-  ungroup() %>%
+  ungroup()
+
+# Create violin plots
+bx_lvls <- bx_dat %>%
+  group_by(lec_type) %>%
+  summarize(
+    med = median(CHIKV_sgRNA_fc_raw),
+    q3  = quantile(CHIKV_sgRNA_fc_raw, 0.75),
+    max = max(CHIKV_sgRNA_fc_raw),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(med), desc(q3), desc(max)) %>%
+  pull(lec_type)
+
+sgRNA_boxes <- bx_dat %>%
   plot_violin(
     "CHIKV_sgRNA_fc_raw",
     cluster_col = "lec_type",
     plot_colors = lec_type_cols,
-    plot_lvls   = NULL,
-    trans       = "log10",
+    plot_lvls   = bx_lvls,
     scale       = "width",
     draw_quantiles = c(0.25, 0.75)
   ) +
+  scale_y_continuous(trans = "log10", expand = expansion(c(0.05, 0.15))) +
   labs(y = "CHIKV sgRNA\nratio") +
   base_theme +
   theme(
@@ -868,35 +879,44 @@ sgRNA_boxes <- plt_dat %>%
     plot.margin     = margin(25, 5, 5, 15),
     legend.position = "none",
     axis.title.x    = element_blank(),
-    axis.text.x     = element_text(angle = 45, hjust = 1),
+    axis.text.x     = element_text(size = txt_pt2, angle = 45, hjust = 1),
     axis.text.y     = element_text(size = txt_pt1),
   )
 
+# Calculate p-values
+bx_p_vals <- bx_dat %>%
+  calc_p_vals(
+    data_column = "CHIKV_sgRNA_fc_raw",
+    type_column = "lec_type"
+  )
 
+# Comparisons for p-value labels
+bx_comps <- bx_lvls %>%
+  imap(~ {
+    tp2 <- bx_lvls[.y + 1]
 
-# # Calculate p-values
-# p_dat <- plt_dat %>%
-#   filter(
-#     CHIKV_sgRNA > 0,
-#     CHIKV_5 > 0
-#   ) %>%
-#   mutate(CHIKV_sgRNA_fc_raw = CHIKV_sgRNA / CHIKV_5) %>%
-#   group_by(lec_type) %>%
-#   filter(n() > 40) %>%
-#   ungroup() %>%
-#   dplyr::select(lec_type, CHIKV_sgRNA_fc_raw, CHIKV_sgRNA_fc) %>%
-#   split(.$lec_type)
-# 
-# target <- p_dat$`unassigned-LEC`
-# 
-# p_dat %>%
-#   imap_dfr(~ {
-#     wilcox.test(target$CHIKV_sgRNA_fc_raw, .x$CHIKV_sgRNA_fc_raw) %>%
-#       tidy() %>%
-#       mutate(lec_type = .y)
-#   }) %>%
-#   mutate(p_adj = p.adjust(p.value, method = "bonferroni")) %>%
-#   arrange(p.value)
+    if (!is.na(tp2)) c(.x, tp2)
+  }) %>%
+  Filter(negate(is.null), .)
+
+# Add p-value labels
+bx_comps %>%
+  walk(~ {
+    p <- bx_p_vals %>%
+      filter(`Cell type 1` %in% .x & `Cell type 2` %in% .x) %>%
+      pull(p_adj)
+    
+    sgRNA_boxes <<- sgRNA_boxes %>%
+      add_pvals(
+        x        = .x[1],
+        xend     = .x[2],
+        y        = 500,
+        p_y      = 1500,
+        p_val    = p,
+        size     = 8 / .pt,
+        line_col = "grey75"
+      )
+  })
 ```
 
 CHIKV may target MARCO-expressing LECs for infection
@@ -907,7 +927,7 @@ C.  The fraction of cells identified as CHIKV-high is shown for each cell type f
 D.  CHIKV sgRNA ratio is shown for cells with >0 sgRNA counts and >0 5' counts. Cell types with >40 cells are shown.
 E.  The correlation between CHIKV sgRNA ratio and QC metrics is shown for CHIKV-high cells for Marco LECs and unassigned LECs.
 
-```{r "fig S1 v2", fig.width = 16, fig.height = 14}
+```{r "fig S2", fig.width = 16, fig.height = 14}
 top <- plot_grid(
   type_umap, sgRNA_umap,
   labels = c("A", "B"), label_size = ttl_pt2 * 1.5,
@@ -948,9 +968,6 @@ plot_grid(
 <br>
 
 ## Figure S3
-
-This is an alternate version of fig S3 that includes UMAPs showing the
-integrated projections used for annotating cell types.
 
 A.  UMAP projection shows cell type annotations for integrated data.
 B.  UMAP projection shows endothelial cell type annotations for integrated endothelial cell data.
@@ -1026,16 +1043,6 @@ type_fig <- plot_grid(
   nrow  = 1,
   labels = c("A", "B"),
   label_size  = ttl_pt2 * 1.5
-)
-```
-
-```{r "fig S3 cell type", fig.width = 12, fig.height = 18}
-plot_grid(
-  type_heats, NULL, type_boxes,
-  rel_heights = c(0.7, 0.04, 1),
-  label_size  = ttl_pt2 * 1.5,
-  labels      = c("A", "B"),
-  ncol        = 1
 )
 ```
 
@@ -1248,7 +1255,7 @@ type_boxes <- gns %>%
   )
 ```
 
-```{r "fig S3 cell type", fig.width = 12, fig.height = 20}
+```{r "fig S3", fig.width = 12, fig.height = 20}
 plot_grid(
   type_fig, NULL, type_heats_v2, NULL, type_boxes,
   rel_heights = c(0.7, 0.04, 0.4, 0.04, 1.2),
