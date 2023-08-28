@@ -1166,9 +1166,13 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
   
   if (!is.null(cell_types)) {
     if (is.numeric(cell_types)) {
-      cell_types <- deg_data %>%
+      all_types <- distinct(exp_data, lec_type)  # Cell types with no DEGs will
+                                                 # not be included in deg_data,
+      cell_types <- deg_data %>%                 # add these as 0's
         group_by(!!sym(type_clmn)) %>%
         summarize(n_genes = n(), .groups = "drop") %>%
+        full_join(all_types, by = "lec_type") %>%
+        mutate(n_genes = replace_na(n_genes, 0)) %>%
         arrange(desc(n_genes)) %>%
         head(cell_types) %>%
         pull(type_clmn)
@@ -1199,7 +1203,6 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
     )
   
   # Format data for plotting lines
-  # only plot cell types with at least one gene upregulated
   # plot as segments so linetype can be varied based on significance
   # need to pull table of DEGs to determine which timepoints/genes are signif
   # pull median expression to use for the start and end of each segment

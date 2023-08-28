@@ -875,8 +875,8 @@ sgRNA_boxes <- bx_dat %>%
   labs(y = "CHIKV sgRNA\nratio") +
   base_theme +
   theme(
-    aspect.ratio    = 0.25,
-    plot.margin     = margin(25, 5, 5, 15),
+    aspect.ratio    = 0.32,
+    plot.margin     = margin(5, 5, 0, 15),
     legend.position = "none",
     axis.title.x    = element_blank(),
     axis.text.x     = element_text(size = txt_pt2, angle = 45, hjust = 1),
@@ -1581,17 +1581,6 @@ feats %>%
 
 ## Figure 5
 
-Differentially expressed genes were identified for each cell type for mock vs 8 hpi and 8 hpi vs 24 hpi. Genes were considered upregulated if the log2 fold change was >0.15 for 8 hpi and >0.25 for 24 hpi for all replicates and the largest p-value for all replicates was <0.05.
-
-Gene ontology terms (biological process) were then identified for the top 200 upregulated genes (sorted by maximum p-value between replicates) for each cell type. Terms were filtered to only include those with an adjusted p-value <0.05 and at least 3 or 10 upregulated genes overlapping the term for the 8 hpi and 24 hpi timepoints, respectively. Terms identified for each cell type were combined and clustered into 5 modules based on the pairwise overlap between terms.
-
-A.  UMAP projection shows cells from the 8 hpi and 24 hpi timepoints, cells are colored by sample.
-B.  UMAP projection shows cells from the 8 hpi and 24 hpi timepoints, cells are colored by cell type.
-C.  The 8 hpi timeopoint shows upregulation of genes associated with an innate immune response. Enrichment scores are shown for each cell type for the primary gene ontology module identified for genes upregulated at the 8 hpi timepoint. Enrichment score is the fraction of upregulated genes overlapping the term divided by the fraction of background genes overlapping the term. GO terms that are significantly enriched are marked by the diamond.
-D.  A selection of top upregulated genes identified for the terms shown in A are plotted. Points show the median expression for the mock (m), 8 hpi (8h), and 24 hpi (24h) samples, grey bars show the interquartile range. A solid line indicates that the gene is significantly upregulated between the samples.
-E.  Enrichment scores are shown for the primary GO modules identified for the 24 hpi timepoint, as described in C.
-F.  Top upregulated genes identified for the terms shown in E are plotted as described in D.
-
 ```{r "DEGs"}
 # Create object to compare CHIKV 24 hpi with 8 hpi
 # only use top two biological replicates with the most cells
@@ -1622,6 +1611,29 @@ so_merge <- so_8 %>%
   mutate_meta(mutate, treatment = "8hpi") %>%
   merge(so_merge)
 
+# Set cell type column for LECs/BECs/FRCs
+so_8 <- so_8 %>%
+  mutate_meta(
+    mutate,
+    cell_type_2 = case_when(
+      lec_type %in% c("BEC", "FRC") ~ lec_type,
+      lec_type == "PvC"             ~ "FRC",
+      cell_type %in% lec_cell_types ~ "LEC",
+      TRUE                          ~ lec_type
+    )
+  )
+
+so_merge <- so_merge %>%
+  mutate_meta(
+    mutate,
+    cell_type_2 = case_when(
+      lec_type %in% c("BEC", "FRC") ~ lec_type,
+      lec_type == "PvC"             ~ "FRC",
+      cell_type %in% lec_cell_types ~ "LEC",
+      TRUE                          ~ lec_type
+    )
+  )
+
 # Create objects to compare CHIKV-low/-high cells
 so_8_chikv <- so_8 %>%
   subset(treatment == "CHIKV")
@@ -1631,17 +1643,21 @@ so_24_chikv <- so_24 %>%
 
 # Identify up/down regulated genes
 # use FindConservedMarkers()
-deg_args <- list(
-  so_in      = c("so_8", "so_8", "so_24", "so_24", "so_merge", "so_merge", "so_8_chikv", "so_24_chikv"),
-  treat_clmn = c(rep("treatment", 6), rep("chikv_grp", 2)),
-  ident_1    = c(rep("CHIKV", 4), rep("24hpi", 2), rep("CHIKV-high", 2)),
-  ident_2    = c(rep("mock", 4),  rep("8hpi", 2),  rep("CHIKV-low", 2)),
-  log_fc     = list(
-    c(0.15, Inf), c(-Inf, -0.15),  # 8 hpi up and down
-    c(0.25, Inf), c(-Inf, -0.25),  # 24 hpi up and down
-    c(0.25, Inf), c(-Inf, -0.25),  # merged up and down
-    c(0.15, Inf), c(0.15, Inf)     # CHIKV-high up
-  )
+deg_args <- tribble(
+  ~so_in,        ~type_clmn, ~treat_clmn, ~ident_1,     ~ident_2,    ~log_fc,
+  "so_8",        "lec_type", "treatment", "CHIKV",      "mock",      c(0.15, Inf),
+  "so_8",        "lec_type", "treatment", "CHIKV",      "mock",      c(-Inf, -0.15),
+  "so_24",       "lec_type", "treatment", "CHIKV",      "mock",      c(0.25, Inf),
+  "so_24",       "lec_type", "treatment", "CHIKV",      "mock",      c(-Inf, -0.25),
+  "so_merge",    "lec_type", "treatment", "24hpi",      "8hpi",      c(0.25, Inf),
+  "so_merge",    "lec_type", "treatment", "24hpi",      "8hpi",      c(-Inf, -0.25),
+  "so_8_chikv",  "lec_type", "chikv_grp", "CHIKV-high", "CHIKV-low", c(0.15, Inf),
+  "so_24_chikv", "lec_type", "chikv_grp", "CHIKV-high", "CHIKV-low", c(0.15, Inf),
+  
+  "so_8",        "cell_type_2", "treatment", "CHIKV",   "mock",      c(0.15, Inf),
+  "so_8",        "cell_type_2", "treatment", "CHIKV",   "mock",      c(-Inf, -0.15),
+  "so_merge",    "cell_type_2", "treatment", "24hpi",   "8hpi",      c(0.25, Inf),
+  "so_merge",    "cell_type_2", "treatment", "24hpi",   "8hpi",      c(-Inf, -0.25)
 )
 
 degs <- deg_args %>%
@@ -1652,9 +1668,10 @@ degs <- deg_args %>%
     else if (all(args$log_fc < 0)) typ <- "-down"
     else                           typ <- ""
     
-    prfx <- str_remove(args$so_in, "^so_")
-    file <- str_c(prfx, "_lectype_chikv", typ, "_markers.tsv")
-    file <- here("results/tables", file)
+    prfx  <- str_remove(args$so_in, "^so_")
+    label <- str_remove_all(args$type_clmn, "_")
+    file  <- str_c(prfx, "_", label, "_chikv", typ, "_markers.tsv")
+    file  <- here("results/tables", file)
     
     d <- eval(sym(args$so_in)) %>%
       get_degs(
@@ -1663,11 +1680,11 @@ degs <- deg_args %>%
         ident_1    = args$ident_1,
         ident_2    = args$ident_2,
         treat_clmn = args$treat_clmn,
-        type_clmn  = "lec_type"
+        type_clmn  = args$type_clmn
       ) %>%
       list()
     
-    names(d) <- str_c(args$so_in, typ)
+    names(d) <- str_c(args$so_in, typ, "_", label)
     
     d
   }) %>%
@@ -1686,8 +1703,7 @@ go_sim_data <- godata(
 
 # Get GO terms
 # only use top 200 DEGs
-# go_degs <- degs[grepl("^so_(8|merge)-up$|_chikv-up$", names(degs))] %>%
-go_degs <- degs[grepl("^so_(8|merge)-up$", names(degs))] %>%
+go_degs <- degs[grepl("^so_(8|merge)-up_lectype$", names(degs))] %>%
   map(~ {
     .x %>%
       arrange(max_pval) %>%
@@ -1699,9 +1715,11 @@ go_degs <- degs[grepl("^so_(8|merge)-up$", names(degs))] %>%
 go <- go_degs %>%
   imap(~ {
     typ   <- str_remove(.y, ".+(?=-)")
+    clmn  <- str_extract(typ, "[a-zA-Z0-9]+$")
+    typ   <- str_remove(typ, str_c("_", clmn))
     so_in <- str_remove(.y, "-.+$")
     prfx  <- str_remove(so_in, "^so_")
-    file  <- str_c(prfx, "_lectype_chikv", typ, "_go")
+    file  <- str_c(prfx, "_", clmn, "_chikv", typ, "_go")
     file  <- here("results/tables", file)
     
     .x %>%
@@ -1844,8 +1862,8 @@ go_heat <- clusters %>%
 
 ```{r "8hpi examples"}
 # Example genes to plot
-obj <- "so_8-up"
-genes_to_plot <- c("Bst2", "Isg15", "Irf7")
+obj <- "so_8-up_lectype"
+genes_to_plot <- c("Irf7", "Bst2", "Zbp1")
 
 gns <- go[[obj]]@compareClusterResult %>%
   as_tibble() %>%
@@ -1855,8 +1873,7 @@ gns <- go[[obj]]@compareClusterResult %>%
   group_by(geneID, cluster) %>%
   summarize(n = n_distinct(Cluster), .groups = "drop") %>%
   distinct(geneID, .keep_all = TRUE) %>%
-  arrange(cluster, desc(n)) %>%
-  filter(geneID %in% genes_to_plot)
+  arrange(cluster, desc(n))
 
 top_sig <- degs[[obj]] %>%
   filter(gene %in% gns$geneID) %>%
@@ -1865,28 +1882,29 @@ top_sig <- degs[[obj]] %>%
 
 gns <- gns %>%
   left_join(top_sig, by = c(geneID = "gene")) %>%
-  arrange(desc(n), pval) %>%
-  group_by(cluster) %>%
-  dplyr::slice(1:3)
+  arrange(cluster, desc(n), pval) %>%
+  filter(geneID %in% genes_to_plot)
 
 gns <- set_names(as.character(gns$cluster), gns$geneID)
 
 # Create plots
 examples_8 <- create_gene_plots(
   exp_data   = list("8hpi" = so_8, "24hpi" = so_merge),
-  deg_data   = list("8hpi" = degs$`so_8-up`, "24hpi" = degs$`so_merge-up`),
+  deg_data   = list(
+    "8hpi"  = degs$`so_8-up_lectype`,
+    "24hpi" = degs$`so_merge-up_lectype`
+  ),
   gns        = gns,
   clrs       = clrs_8,
   type_clmn  = "lec_type",
   exclude_cell_types = exclude_cell_types,
-  only_show_upreg = FALSE
+  only_show_upreg    = TRUE
 )
 ```
 
 ```{r "24hpi examples"}
 # Example genes to plot
-# HAND SELECTING SOME FAVORITES
-obj <- "so_merge-up"
+obj <- "so_merge-up_lectype"
 genes_to_plot <- c("Ccl2", "Isg15", "Ifi203", "Cxcl9", "Cxcl10", "Ccl7")
 
 gns <- go[[obj]]@compareClusterResult %>%
@@ -1914,34 +1932,39 @@ gns <- set_names(as.character(gns$cluster), gns$geneID)
 # Create plots
 examples_24 <- create_gene_plots(
   exp_data   = list("8hpi" = so_8, "24hpi" = so_merge),
-  deg_data   = list("8hpi" = degs$`so_8-up`, "24hpi" = degs$`so_merge-up`),
+  deg_data   = list(
+    "8hpi"  = degs$`so_8-up_lectype`,
+    "24hpi" = degs$`so_merge-up_lectype`
+  ),
   gns        = gns,
   clrs       = clrs_24,
   type_clmn  = "lec_type",
   exclude_cell_types = exclude_cell_types,
-  only_show_upreg = FALSE
+  only_show_upreg    = TRUE
 )
-
-
-# gns %>%
-#   filter(grepl("C[xc][clr]|I[fs][irg]", geneID))
 ```
 
 ```{r "additional examples"}
 # Additional example genes to plot
-obj <- "so_merge-up"
-genes_to_plot <- c("Ccl19", "Ccl21a", "Il7", "Csf1", "Cxcl13", "Tnfsf13b")
+genes_to_plot <- c("Ccl19", "Ccl21a", "Il7", "Cxcl13")
+
+# DEGs to use for setting linetype
+# merge DEGs so both up- and down-regulated get marked
+degs_8_merged  <- bind_rows(degs[c("so_8-up_celltype2", "so_8-down_celltype2")])
+degs_24_merged <- bind_rows(degs[c("so_merge-up_celltype2", "so_merge-down_celltype2")])
 
 # Create plots
 other_examples <- create_gene_plots(
   exp_data   = list("8hpi" = so_8, "24hpi" = so_merge),
-  deg_data   = list("8hpi" = degs$`so_8-up`, "24hpi" = degs$`so_merge-up`),
+  deg_data   = list("8hpi" = degs_8_merged, "24hpi" = degs_24_merged),
   gns        = genes_to_plot,
   clrs       = clrs_24,
-  type_clmn  = "lec_type",
-  exclude_cell_types = exclude_cell_types,
-  only_show_upreg = FALSE
+  type_clmn  = "cell_type_2",
+  cell_types = c("LEC", "BEC", "FRC")
 ) +
+  guides(linetype = guide_legend(
+    title = "Differentially expressed", title.position = "top"
+  )) +
   theme(plot.margin = margin(20, 0, 0, 0))
 
 other_examples <- plot_grid(
@@ -1949,7 +1972,7 @@ other_examples <- plot_grid(
   labels     = c("", "G", ""),
   label_size = ttl_pt2 * 1.5,
   nrow       = 1,
-  rel_widths = c(0.25, 0.5, 0.25),
+  rel_widths = c(0.31, 0.38, 0.31),
   hjust      = -1,
   vjust      = 1.5
 )
@@ -1994,15 +2017,16 @@ create_type_umaps <- function(so_in, data_col, x = "hUMAP_1", y = "hUMAP_2",
   res <- lift_dl(plot_scatter)(args) +
     ggtitle(ttl) +
     theme(
-      aspect.ratio = 0.9,
-      plot.margin  = margin(15, 15, 30, 15),
-      axis.title   = element_blank(),
-      axis.text    = element_blank(),
-      axis.ticks   = element_blank(),
-      legend.title = element_blank(),
-      panel.background = element_blank(),
-      plot.title   = element_text(face = "plain", hjust = 0.5),
-      legend.position = "right"
+      aspect.ratio      = 0.9,
+      plot.margin       = margin(15, 15, 30, 15),
+      axis.title        = element_blank(),
+      axis.text         = element_blank(),
+      axis.ticks        = element_blank(),
+      legend.title      = element_blank(),
+      panel.background  = element_blank(),
+      plot.title        = element_text(face = "plain", hjust = 0.5),
+      legend.position   = "right",
+      legend.key.height = unit(30, "pt")
     )
   
   if (n_lab) {
@@ -2071,6 +2095,21 @@ u_fig <- plot_grid(
 )
 ```
 
+Differentially expressed genes were identified for each cell type for mock vs 8 hpi and 8 hpi vs 24 hpi. Genes were considered upregulated if the log2 fold change was >0.15 for 8 hpi and >0.25 for 24 hpi for all replicates and the largest p-value for all replicates was <0.05.
+
+```{r "DEG parameters"}
+as.data.frame(deg_args)
+```
+
+Gene ontology terms (biological process) were then identified for the top 200 upregulated genes (sorted by maximum p-value between replicates) for each cell type. Terms were filtered to only include those with an adjusted p-value <0.05 and at least 3 or 10 upregulated genes overlapping the term for the 8 hpi and 24 hpi timepoints, respectively. Terms identified for each cell type were combined and clustered into 5 modules based on the pairwise overlap between terms.
+
+A.  UMAP projection shows cells from the 8 hpi and 24 hpi timepoints, cells are colored by sample.
+B.  UMAP projection shows cells from the 8 hpi and 24 hpi timepoints, cells are colored by cell type.
+C.  The 8 hpi timeopoint shows upregulation of genes associated with an innate immune response. Enrichment scores are shown for each cell type for the primary gene ontology module identified for genes upregulated at the 8 hpi timepoint. Enrichment score is the fraction of upregulated genes overlapping the term divided by the fraction of background genes overlapping the term. GO terms that are significantly enriched are marked by the diamond.
+D.  A selection of top upregulated genes identified for the terms shown in A are plotted. Points show the median expression for the mock (m), 8 hpi (8h), and 24 hpi (24h) samples, grey bars show the interquartile range. A solid line indicates that the gene is significantly upregulated between the samples.
+E.  Enrichment scores are shown for the primary GO modules identified for the 24 hpi timepoint, as described in C.
+F.  Top upregulated genes identified for the terms shown in E are plotted as described in D.
+
 ```{r "GO figures", fig.width = 13, fig.height = 18}
 top <- plot_grid(
   go_heat$`so_8-up`$heatmap, examples_8,
@@ -2096,7 +2135,7 @@ bot <- plot_grid(
 plot_grid(
   u_fig, top, bot, other_examples,
   ncol = 1,
-  rel_heights = c(0.8, 0.64, 1, 1)
+  rel_heights = c(0.8, 0.64, 1, 0.8)
 )
 ```
 
@@ -2129,7 +2168,7 @@ go_type <- go %>%
 # Create expanded GO figures
 create_go_summary_figures <- function(go_in, sample_name, n_clsts = 5,
                                       n_terms = 6, n_genes = 4, pval = 0.05,
-                                      qval = 0.2) {
+                                      qval = 0.2, go_obj_sfx = "-up_lectype") {
   
   # Cluster GO terms
   # n_gns   <- ifelse(grepl(so_8_re, .y), 10, 20)
@@ -2147,7 +2186,7 @@ create_go_summary_figures <- function(go_in, sample_name, n_clsts = 5,
   if (is.null(clsts)) return(NULL)
   
   obj    <- str_remove(sample_name, "-.+$")
-  obj    <- str_c(obj, "-up")
+  obj    <- str_c(obj, go_obj_sfx)
   go_typ <- go[[obj]]  # use objects containing all cell types for plotting
   
   # Create tree
@@ -2261,7 +2300,10 @@ create_go_summary_figures <- function(go_in, sample_name, n_clsts = 5,
   # Create gene plots
   gn_plts <- create_gene_plots(
     exp_data   = list("8hpi" = so_8, "24hpi" = so_merge),
-    deg_data   = list("8hpi" = degs$`so_8-up`, "24hpi" = degs$`so_merge-up`),
+    deg_data   = list(
+      "8hpi"  = degs[[str_c("so_8", go_obj_sfx)]],
+      "24hpi" = degs[[str_c("so_merge", go_obj_sfx)]]
+    ),
     gns        = gns,
     cell_types = 8,
     clrs       = clst_clrs,
