@@ -74,7 +74,7 @@ circ_coords <- dat %>%
 pseudo <- dat[[names(clmn)]]
 pseudo <- min(pseudo[pseudo > 0]) / 2
 
-A <- dat %>%
+pct_chikv_umap <- dat %>%
   ggplot(aes(UMAP_1, UMAP_2, fill = !!sym(names(clmn)) + pseudo)) +
   geom_point_trace(
     color = "grey",
@@ -397,7 +397,7 @@ madcam_bxs <- plt_dat %>%
 
 ```{r "fig 1", fig.width = 16, fig.height = 12}
 top <- plot_grid(
-  A, chikv_typs_u,
+  pct_chikv_umap, chikv_typs_u,
   labels = c("A", "B"), label_size = ttl_pt2 * 1.5,
   nrow   = 1,
   align  = "h",
@@ -426,15 +426,16 @@ plot_grid(
 Mxra8 expression is shown for CHIKV+/- cells for the 8 hpi timepoint. Mxra8 expression appears to be higher in CHIKV+ FRCs and BECs, suggesting a distinct mechanism of CHIKV entry. This is a result we have discussed previously, and could be included in a supplemental figure.
 
 ```{r, fig.width = 12, fig.height = 5}
-lec_type_cols[c("Marco_LEC", "FRC", "BEC")] %>%
+mxra8_bxs <- lec_type_cols[c("Marco_LEC", "FRC", "BEC")] %>%
   imap(~ {
     plt_dat %>%
       create_gene_boxplot(
         GENE = "Mxra8", TYPE = .y,
-        clr = .x, lvls = plt_lvls
+        clr = .x, lvls = plt_lvls, p_size = txt_pt1
       )
-  }) %>%
-  plot_grid(plotlist = ., nrow = 1)
+  })
+
+plot_grid(plotlist = mxra8_bxs, nrow = 1)
 ```
 
 Marco and Mxra8 expression is shown for CHIKV-high/low cells for the 24 hpi timepoint. Using the updated cell type annotations, we still observe increased Marco expression for CHIKV-high Marco LECs. There is no difference in Mxra8 expression for CHIKV-high FRCs and BECs at 24 hpi.
@@ -445,7 +446,7 @@ plts <- lec_type_cols[c("FRC", "BEC")] %>%
     so_24 %>%
       create_gene_boxplot(
         GENE = "Mxra8", TYPE = .y,
-        clr = .x
+        clr = .x, p_size = txt_pt1
       )
   })
 
@@ -521,14 +522,34 @@ dat <- so_24@meta.data %>%
 chikv_dat <- dat %>%
   filter(chikv_grp == chikv_grps[2])
 
+# Coordinates for circle
+circ_coords <- dat %>%
+  filter(
+    treatment == treats[2],
+    cell_type_2 == "LEC"
+  ) %>%
+  summarize(
+    x   = mean(UMAP_1) - 0.25,
+    y   = mean(UMAP_2),
+    rad = diff(range(UMAP_1))
+  )
+
 # Cell type UMAP
 type_umap <- dat %>%
   plot_scatter(
     "lec_type",
     plot_colors  = lec_type_cols,
-    plot_lvls    = NULL,
+    plot_lvls    = c("FRC", "unassigned-LEC", "Marco_LEC", "fLEC"),
     size         = 0.2,
     label_params = list(size = txt_pt2)
+  ) +
+  geom_circle(
+    aes(x0 = x, y0 = y, r = 2, x = NULL, y = NULL),
+    data      = circ_coords,
+    fill      = NA,
+    color     = "black",
+    linetype  = 2,
+    linewidth = 0.75
   ) +
   umap_theme +
   theme(
@@ -543,6 +564,14 @@ sgRNA_umap <- dat %>%
     color = "grey",
     trace_position = "bottom",
     size = 0.5
+  ) +
+  geom_circle(
+    aes(x0 = x, y0 = y, r = 2, x = NULL, y = NULL),
+    data      = circ_coords,
+    fill      = NA,
+    color     = "black",
+    linetype  = 2,
+    linewidth = 0.75
   ) +
   scale_fill_gradientn(colours = c("white", "#0072B2", "#002037"), labels = scales::label_number()) +
   guides(fill = guide_colorbar(title.position = "top", ticks = FALSE, title = "CHIKV sgRNA ratio")) +
@@ -742,12 +771,6 @@ scatter <- plt_dat %>%
 # Create final figure
 scatter <- scatter %>%
   wrap_plots(byrow = FALSE, nrow = 1)
-
-# ggsave(
-#   here("results/figures/2023-07-04_alt_scatter_plots.pdf"),
-#   width = 10, height = 7,
-#   dpi = 600, device = "pdf"
-# )
 ```
 
 ```{r "fracion CHIKV-high"}
@@ -822,12 +845,12 @@ frac_24 <- frac_dat %>%
   labs(y = "Fraction\nCHIKV-high cells") +
   base_theme +
   theme(
-    axis.text.y = element_text(size = txt_pt1),
-    axis.text.x = element_text(size = txt_pt2, angle = 45, hjust = 1),
-    axis.title.x = element_blank(),
+    axis.text.y     = element_text(size = txt_pt1),
+    axis.text.x     = element_text(size = txt_pt2, angle = 45, hjust = 1),
+    axis.title.x    = element_blank(),
     legend.position = "none",
-    aspect.ratio = 0.25,
-    plot.margin = margin(25, 5, 5, 15)
+    aspect.ratio    = 0.25,
+    plot.margin     = margin(25, 5, 5, 15)
   )
 ```
 
@@ -1096,7 +1119,7 @@ heat_args <- list(
 type_heats_v2 <- h_mat %>%
   create_cor_heatmap(ln_clr = fade_0)
 
-type_heats_v2 <- plot_grid(
+heats_fig <- plot_grid(
   type_heats_v2, NULL,
   labels     = c("C", ""),
   label_size = ttl_pt2 * 1.5
@@ -1257,9 +1280,46 @@ type_boxes <- gns %>%
 
 ```{r "fig S3", fig.width = 12, fig.height = 20}
 plot_grid(
-  type_fig, NULL, type_heats_v2, NULL, type_boxes,
+  type_fig, NULL, heats_fig, NULL, type_boxes,
   rel_heights = c(0.7, 0.04, 0.4, 0.04, 1.2),
   labels      = c("", "", "", "", "D"),
+  label_size  = ttl_pt2 * 1.5,
+  ncol        = 1
+)
+```
+
+<br>
+
+### V2
+
+This is an alternate version of Figure S3 that includes plots showing Mxra8 expression for CHIKV+ FRCs and BECs for the 8 hpi timepoint.
+
+```{r "fig S3 v2", fig.width = 12, fig.height = 20}
+d <- mxra8_bxs[c("FRC", "BEC")] %>%
+  map(~ {
+    .x +
+      theme(
+        axis.title.y = element_text(size = txt_pt2),
+        axis.text.x  = element_text(size = txt_pt1),
+        axis.text.y  = element_text(size = txt_pt1),
+        plot.title   = element_text(size = ttl_pt2)
+      )
+  }) %>%
+  plot_grid(plotlist = .)
+
+heats_fig_v2 <- plot_grid(
+  type_heats_v2, d,
+  # align      = "h",
+  # axis       = "b",
+  labels     = c("C", "D"),
+  label_size = ttl_pt2 * 1.5,
+  nrow       = 1
+)
+
+plot_grid(
+  type_fig, NULL, heats_fig_v2, NULL, type_boxes,
+  rel_heights = c(0.7, 0.04, 0.4, 0.04, 1.2),
+  labels      = c("", "", "", "", "E"),
   label_size  = ttl_pt2 * 1.5,
   ncol        = 1
 )
@@ -1610,29 +1670,6 @@ so_merge <- so_8 %>%
   subset(treatment == "CHIKV") %>%
   mutate_meta(mutate, treatment = "8hpi") %>%
   merge(so_merge)
-
-# Set cell type column for LECs/BECs/FRCs
-so_8 <- so_8 %>%
-  mutate_meta(
-    mutate,
-    cell_type_2 = case_when(
-      lec_type %in% c("BEC", "FRC") ~ lec_type,
-      lec_type == "PvC"             ~ "FRC",
-      cell_type %in% lec_cell_types ~ "LEC",
-      TRUE                          ~ lec_type
-    )
-  )
-
-so_merge <- so_merge %>%
-  mutate_meta(
-    mutate,
-    cell_type_2 = case_when(
-      lec_type %in% c("BEC", "FRC") ~ lec_type,
-      lec_type == "PvC"             ~ "FRC",
-      cell_type %in% lec_cell_types ~ "LEC",
-      TRUE                          ~ lec_type
-    )
-  )
 
 # Create objects to compare CHIKV-low/-high cells
 so_8_chikv <- so_8 %>%
@@ -2101,7 +2138,9 @@ Differentially expressed genes were identified for each cell type for mock vs 8 
 as.data.frame(deg_args)
 ```
 
-Gene ontology terms (biological process) were then identified for the top 200 upregulated genes (sorted by maximum p-value between replicates) for each cell type. Terms were filtered to only include those with an adjusted p-value <0.05 and at least 3 or 10 upregulated genes overlapping the term for the 8 hpi and 24 hpi timepoints, respectively. Terms identified for each cell type were combined and clustered into 5 modules based on the pairwise overlap between terms.
+<br>
+
+Gene ontology terms (biological process) were identified for the top 200 upregulated genes (sorted by maximum p-value between replicates) for each cell type. Terms were filtered to only include those with an adjusted p-value <0.05 and at least 3 or 10 upregulated genes overlapping the term for the 8 hpi and 24 hpi timepoints, respectively. Terms identified for each cell type were combined and clustered into 5 modules based on the pairwise overlap between terms.
 
 A.  UMAP projection shows cells from the 8 hpi and 24 hpi timepoints, cells are colored by sample.
 B.  UMAP projection shows cells from the 8 hpi and 24 hpi timepoints, cells are colored by cell type.
@@ -2366,4 +2405,56 @@ The similarity between GO clusters identified for the 8 and 24 hpi timepoints is
 sim_heatmap
 ```
 
+
+
+```{r "GO CLUSTER GENE OVERLAP"}
+# Pull upregulated genes for each GO cluster for each timepoint
+clst_terms <- clusters %>%
+  map(~ {
+    .x$clusters %>%
+      split(.$cluster) %>%
+      map(pull, Description)
+  })
+
+clst_gns <- clst_terms %>%
+  imap(~ {
+    tm <- .y
+    
+    .x %>%
+      map(~ {
+        go[[tm]]@compareClusterResult %>%
+          filter(Description %in% .x) %>%
+          pull(geneID) %>%
+          str_split("/") %>%
+          unlist() %>%
+          unique()
+      })
+  })
+
+# Calculate Jaccard index for each comparison
+.calc_jaccard <- function(x, y) {
+  length(intersect(x, y)) / length(union(x, y))
+}
+
+cluster_overlap <- clst_gns$`so_8-up_lectype` %>%
+  imap_dfr(~ {
+    gns1  <- .x
+    clst1 <- .y
+    
+    clst_gns$`so_merge-up_lectype` %>%
+      imap_dfr(~ {
+        tibble(
+          `8hpi_cluster`  = clst1,
+          `24hpi_cluster` = .y,
+          jaccard         = .calc_jaccard(gns1, .x)
+        )
+      })
+  })
+
+# Create heatmap
+cluster_overlap %>%
+  ggplot(aes(`8hpi_cluster`, `24hpi_cluster`, fill = jaccard)) +
+  geom_tile() +
+  base_theme
+```
 

@@ -162,7 +162,7 @@ create_cor_heatmap <- function(df_in, ttl = NULL, lec_labs = NULL, ln_clr = fade
 
 create_gene_boxplot <- function(input, GENE, TYPE, type_clmn = "lec_type",
                                 clr = lec_type_cols[[TYPE]], lvls = NULL,
-                                pval_y = 5, use_adj_p = TRUE) {
+                                pval_y = 5, p_size = txt_pt2, use_adj_p = TRUE) {
   
   # Format plot data
   dat <- input %>%
@@ -220,7 +220,7 @@ create_gene_boxplot <- function(input, GENE, TYPE, type_clmn = "lec_type",
       plot.title   = element_text(size = ttl_pt2 * 1.5),
       axis.title.y = element_text(size = ttl_pt2),
       axis.title.x = element_blank(),
-      axis.text.x  = element_text(size = ttl_pt2, hjust = c(0.75, 0.5, 0.25)),
+      axis.text.x  = element_text(size = ttl_pt1, hjust = c(0.75, 0.5, 0.25)),
       plot.margin  = margin(5, 10, 5, 5)
     )
   
@@ -240,7 +240,7 @@ create_gene_boxplot <- function(input, GENE, TYPE, type_clmn = "lec_type",
         add_pvals(
           ...,
           p_val    = p,
-          size     = txt_pt2 / .pt,
+          size     = p_size / .pt,
           line_col = "grey75"
         )
     })
@@ -2046,11 +2046,24 @@ so_merge <- so_merge %>%
     lec_type    = ifelse(is.na(lec_type), cell_type, lec_type),
     lec_subtype = replace_na(lec_subtype, "other"),
     
-    chikv_type = if_else(chikv_grp == chikv_grps[2], lec_type, chikv_grp)
+    chikv_type = if_else(chikv_grp == chikv_grps[2], lec_type, chikv_grp),
+    
+    # Labels for LECs, BECs, and FRCs
+    cell_type_2 = case_when(
+      lec_type %in% c("BEC", "FRC") ~ lec_type,
+      lec_type == "PvC"             ~ "FRC",
+      cell_type %in% lec_cell_types ~ "LEC",
+      TRUE                          ~ lec_type
+    )
 )
 
 # Add subsets to 8 and 24 hpi objects
-clmns <- c("cell_type", "lec_type", "lec_subtype", "frc_type", "frc_subtype", "chikv_type")
+clmns <- c(
+  "cell_type", "cell_type_2",
+  "lec_type",  "lec_subtype",
+  "frc_type",  "frc_subtype",
+  "chikv_type"
+)
 
 type_dat <- FetchData(so_merge, clmns)
 so_8     <- AddMetaData(so_8, type_dat)
@@ -2079,39 +2092,29 @@ so_merge_df <- so_merge_df %>%
 
 
 
-# # Add enriched stats to 8hpi object
-# so_enr_df <- read_tsv(file.path(params$so_dir, "so_enr_8.tsv.gz"))
-# 
-# enr_counts <- so_enr_df %>%
-#   mutate(
-#     cell_id = str_c("8hpi_", cell_id),
-#     
-#     across(starts_with("enr_"), ~ replace_na(.x, 0)),
-#     
-#     enr_pct_CHIKV = (enr_nCount_CHIKV / (enr_nCount_CHIKV + enr_nCount_RNA)) * 100,
-#     enr_pct_CHIKV = replace_na(enr_pct_CHIKV, 0),
-#     
-#     tot_nCount_CHIKV = nCount_CHIKV + enr_nCount_CHIKV,
-#     tot_nCount_RNA   = nCount_RNA + enr_nCount_RNA,
-#     tot_pct_CHIKV    = (tot_nCount_CHIKV / (tot_nCount_CHIKV + tot_nCount_RNA)) * 100,
-#     
-#     tot_5     = CHIKV_5 + enr_5,
-#     tot_sgRNA = CHIKV_sgRNA + enr_sgRNA,
-#     tot_neg   = CHIKV_neg   + enr_neg
-#   ) %>%
-#   dplyr::select(cell_id, starts_with("tot_"), starts_with("enr_")) %>%
-#   column_to_rownames("cell_id")
-# 
-# # Add enriched counts to object
-# # use enriched counts to identify CHIKV-high, lose 7 cells that have >0
-# # unenriched counts but 0 enriched counts
-# so_8 <- so_8 %>%
-#   AddMetaData(enr_counts) %>%
-#   mutate_meta(
-#     mutate,
-#     chikv_grp     = ifelse(enr_nCount_CHIKV > 0, chikv_grps[2], chikv_grps[1]),
-#     tot_chikv_grp = ifelse(tot_nCount_CHIKV > 0, chikv_grps[2], chikv_grps[1])
-#   )
+# Set cell type column for LECs/BECs/FRCs
+# NEED TO REMAKE OBJECTS WITH THIS COLUMN ADDED
+so_8 <- so_8 %>%
+  mutate_meta(
+    mutate,
+    cell_type_2 = case_when(
+      lec_type %in% c("BEC", "FRC") ~ lec_type,
+      lec_type == "PvC"             ~ "FRC",
+      cell_type %in% lec_cell_types ~ "LEC",
+      TRUE                          ~ lec_type
+    )
+  )
+
+so_24 <- so_24 %>%
+  mutate_meta(
+    mutate,
+    cell_type_2 = case_when(
+      lec_type %in% c("BEC", "FRC") ~ lec_type,
+      lec_type == "PvC"             ~ "FRC",
+      cell_type %in% lec_cell_types ~ "LEC",
+      TRUE                          ~ lec_type
+    )
+  )
 ```
 
 ```{r "theme"}
@@ -2188,9 +2191,7 @@ ito_cols <- ito_cols[3:length(ito_cols)] %>%
 get_cols <- create_col_fun(ito_cols)
 
 sam_cols <- c(
-  # "#F03B20", "#FD8D3C",
   "#BD0026", "#FECC5C", "#FFFFB2",
-  # "#0072B2", "#56B4E9",
   "#00446E", "#035B8F", "#2A8FBF"
 )
 
@@ -2203,27 +2204,12 @@ chikv_infctd <- so_24@meta.data %>%
   filter(mn == max(mn)) %>%
   pull(treatment)
 
-# Cell type colors
-type_cols <- unique(so_24$cell_type)
-type_cols <- set_names(ito_cols[seq_along(type_cols)], type_cols)
-
-type_cols["unassigned"] <- "#999999"
-
+# LEC subset colors
 subtype_cols <- c(colnames(ref_lec), colnames(ref_frc))
 subtype_cols <- set_names(ito_cols[seq_along(subtype_cols)], subtype_cols)
 subtype_cols["unassigned"] <- "#999999"
 subtype_cols["other"]      <- fade_0
 subtype_cols["CD34+ SC"]   <- "#534379"
-
-# lec_type_cols <- c(subtype_cols, type_cols[names(type_cols) != "unassigned"])
-# lec_type_cols["CHIKV-low"]      <- "white"
-# lec_type_cols["T cells"]        <- "black"
-# lec_type_cols["B cells"]        <- "#875C04"
-# lec_type_cols["FRC"]            <- "#00375B"
-# lec_type_cols["PvC"]            <- "#065D43"
-# lec_type_cols["unassigned-LEC"] <- "#676767"
-# lec_type_cols["other"]          <- "grey70"
-
 
 lec_type_cols <- so_24$lec_type %>%
   table() %>%
@@ -2248,6 +2234,17 @@ lec_type_cols["fLEC"]           <- old_cols["FRC"]
 lec_type_cols["tzLEC"]          <- "black"
 lec_type_cols["BEC"]            <- old_cols["unassigned-LEC"]
 lec_type_cols["unassigned-LEC"] <- old_cols["BEC"]
+lec_type_cols["Marco_LEC"]      <- old_cols["T cells"]
+lec_type_cols["T cells"]        <- old_cols["Marco_LEC"]
+
+# Cell type colors
+type_cols <- unique(so_24$cell_type)
+type_cols <- set_names(ito_cols[seq_along(type_cols)], type_cols)
+
+type_cols["unassigned"] <- "#999999"
+
+type_cols_2        <- lec_type_cols
+type_cols_2["LEC"] <- lec_type_cols["Marco_LEC"]
 
 # CHIKV clusters colors
 grp_cols <- set_names(
