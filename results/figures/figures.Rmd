@@ -47,22 +47,23 @@ knitr::knit(here::here(params$src_dir, "setup.Rmd"), "")
 Chikungunya virus is found in MARCO-expressing floor lymphatic endothelial cells
 in the draining lymph node at 8 hpi
 
-A.  UMAP projection shows the fraction of counts aligning to the CHIKV genome for the 8 hpi timepoint.
-B.  UMAP projection shows CHIKV+ cells (>0 CHIKV counts) for the 8 hpi timepoint.
-C.  The percentage of CHIKV counts is shown for cell types with >40 total cells and >3 CHIKV+ cells for the 8 hpi CHIKV-infected sample.
-D.  The fraction of cells identified as CHIKV+ is shown for each cell type in C. Labels show the number of CHIKV+ cells/total cells.
-E.  MARCO expression is shown for fLECs for mock-infected cells and CHIKV-infected cells classified as either CHIKV low or CHIKV high. P values were calculated using a two-sided Wilcoxon rank-sum test with Bonferroni correction. In the boxplot, the central lines, the box limits, and the whiskers represent medians, the interquartile range (IQR), and min/max values that are not outliers, respectively. Outliers are shown as points and include any values that are more than 1.5× IQR away from the box.
-F.  Madcam1 expression is shown for fLECs as described in E.
+A.  UMAP projection shows the relative viral burden for the 8 hpi timepoint. CHIKV score was calculated using the CHIKV-capture libraries. For each cell the number of counts aligning to the CHIKV genome was divided by the total counts (mouse + CHIKV counts) for the cell. A pseudo count (smallest non-zero value / 2) was added to each value plotted.
+B.  UMAP projection shows CHIKV+ cells (CHIKV score >0) for the 8 hpi timepoint. Cell types with <=3 CHIKV+ cells are labeled as "other".
+C.  CHIKV scores (as described in A) are shown for CHIKV+ cell types with >40 total cells and >3 CHIKV+ cells for the 8 hpi sample. P values were calculated using a one-sided Wilcoxon rank sum test with Bonferroni correction to determine whether CHIKV scores for each cell type were elevated when compared with all other CHIKV+ cells. Only adjusted p values <0.05 are shown. For each boxplot, the central lines, box limits, and whiskers represent medians, the interquartile range (IQR), and min/max values that are not outliers, respectively. Outliers are shown as points and include any values that are more than 1.5× IQR away from the box.
+D.  The fraction of cells identified as CHIKV+ is shown for each cell type in C. Labels show the number of CHIKV+ cells/total cells. P values were calculated using a one-sided hypergeometric test with Bonferroni correction to determine whether the frequency of CHIKV+ cells was greater than expected for each cell type. Only adjusted p values <0.05 are shown.
+E.  MARCO expression is shown for fLECs for mock-infected cells and CHIKV-infected cells classified as either CHIKV- or CHIKV+. P values were calculated using a two-sided Wilcoxon rank-sum test with Bonferroni correction.
+F.  Madcam1 expression is shown for fLECs as described in E. Boxplots were drawn as described in C.
 
-```{r "% CHIKV umap", fig.width = 10, fig.height = 10}
+```{r "CHIKV score umap", fig.width = 10, fig.height = 10}
 # Format plot data
-clmn <- c(enr_pct_CHIKV = "CHIKV score")
+score_clmn <- c(enr_pct_CHIKV = "CHIKV score")
 
-dat <- so_8@meta.data %>%
-  arrange(!!sym(names(clmn)))
+fig1_dat <- so_8@meta.data %>%
+  as_tibble(rownames = ".cell_id") %>%
+  arrange(!!sym(names(score_clmn)))
 
-# Coordinates for circle
-circ_coords <- dat %>%
+# Coordinates for circle annotation
+circ_coords <- fig1_dat %>%
   filter(lec_type == "fLEC") %>%
   summarize(
     x   = mean(UMAP_1),
@@ -71,11 +72,13 @@ circ_coords <- dat %>%
   )
 
 # Create UMAP
-pseudo <- dat[[names(clmn)]]
+# add pseudo count since scale will be log-transformed
+# smallest non-zero value divided by 2
+pseudo <- fig1_dat[[names(score_clmn)]]
 pseudo <- min(pseudo[pseudo > 0]) / 2
 
-pct_chikv_umap <- dat %>%
-  ggplot(aes(UMAP_1, UMAP_2, fill = !!sym(names(clmn)) + pseudo)) +
+chikv_score_umap <- fig1_dat %>%
+  ggplot(aes(UMAP_1, UMAP_2, fill = !!sym(names(score_clmn)) + pseudo)) +
   geom_point_trace(
     color = "grey",
     trace_position = "bottom"
@@ -93,7 +96,9 @@ pct_chikv_umap <- dat %>%
     trans   = "log10",
     labels  = scales::label_number()
   ) +
-  guides(fill = guide_colorbar(title.position = "top", ticks = FALSE, title = clmn)) +
+  guides(fill = guide_colorbar(
+    title.position = "top", ticks = FALSE, title = score_clmn
+  )) +
   umap_theme +
   theme(
     aspect.ratio         = 0.9,
@@ -107,10 +112,10 @@ pct_chikv_umap <- dat %>%
   )
 ```
 
-```{r "CHIKV-high umap", fig.width = 10, fig.height = 10}
+```{r "CHIKV+ cell types umap", fig.width = 10, fig.height = 10}
 # Format plot data
-# ONLY SHOW CELLS WITH >3 CHIKV-HIGH CELLS
-chikv_pos_dat <- so_8@meta.data %>%
+# only show cells with >3 CHIKV+ cells, show remaining as "other"
+chikv_pos_dat <- fig1_dat %>%
   filter(chikv_grp == chikv_grps[2]) %>%
   group_by(lec_type) %>%
   mutate(lec_type = ifelse(n() > 3, lec_type, "other")) %>%
@@ -125,7 +130,7 @@ chikv_pos_dat <- chikv_pos_dat %>%
   mutate(lec_type = fct_relevel(lec_type, names(plt_labs)))
 
 # Create UMAP
-chikv_typs_u <- so_8@meta.data %>%
+chikv_typs_umap <- so_8@meta.data %>%
   ggplot(aes(UMAP_1, UMAP_2)) +
   geom_point_trace(
     color = "grey",
@@ -157,14 +162,11 @@ chikv_typs_u <- so_8@meta.data %>%
   )
 ```
 
-```{r "8hpi fraction CHIKV-high"}
-# Format plot data
-dat <- so_8@meta.data %>%
-  as_tibble(rownames = ".cell_id") %>%
-  filter(treatment == treats[2])
-
-# Fraction CHIKV-high cells
-frac_dat <- dat %>%
+```{r "Fraction CHIKV+ boxes"}
+# Fraction CHIKV+ cells
+# only include CHIKV samples
+frac_dat <- fig1_dat %>%
+  filter(treatment == treats[2]) %>%
   group_by(lec_type) %>%
   summarize(
     type_n    = length(chikv_grp[chikv_grp == chikv_grps[2]]),
@@ -238,12 +240,27 @@ frac_8 <- frac_dat %>%
 #   n = 3286,  # number of black balls in urn
 #   k = 74     # number of balls drawn
 # )
+#
+# # As a test, calculate p-value for identitified GO term
+# 84/191	632/15076	6.588999771563824e-65
+# 
+# data.frame(
+#   up    = c(84, 191 - 84),
+#   other = c(632, 15076 - 632),
+#   row.names = c("in_term", "out_term")
+# ) %>%
+#   t() %>%
+#   # chisq.test() %>%
+#   fisher.test(alternative = "t") %>%
+#   tidy()
 ```
 
-```{r "% CHIKV boxes", fig.width = 10, fig.height = 5}
+```{r "CHIKV score boxes", fig.width = 10, fig.height = 5}
 # Calculate p-values
-# only calculate p-values for cell types included fraction bargraphs
-bx_dat <- dat %>%
+# only calculate p-values for cell types included in fraction bargraphs
+# alternative hypothesis is that group1 is greater
+# use bonferroni correction, only show p-values <0.05
+bx_dat <- fig1_dat %>%
   filter(chikv_grp == chikv_grps[2])
 
 p_dat <- bx_dat %>%
@@ -255,8 +272,8 @@ p_dat <- bx_dat %>%
       mutate(p_type = ifelse(lec_type == .x, lec_type, "other")) %>%
       split(.$p_type)
 
-    typ_dat <- d[[.x]][[names(clmn)]]
-    oth_dat <- d[["other"]][[names(clmn)]]
+    typ_dat <- d[[.x]][[names(score_clmn)]]
+    oth_dat <- d[["other"]][[names(score_clmn)]]
 
     p <- wilcox.test(typ_dat, oth_dat, alternative = "greater")
     p <- tidy(p)
@@ -279,12 +296,12 @@ p_dat <- bx_dat %>%
   ungroup()
 
 # Create boxplots
-# Only plot CHIKV-high cells for cell types shown in bargraphs
+# Only plot CHIKV+ cells for cell types shown in Fig 1D bargraphs
 count_bxs <- bx_dat %>%
   filter(lec_type %in% frac_lvls) %>%
   mutate(lec_type = fct_relevel(lec_type, frac_lvls)) %>%
   
-  ggplot(aes(lec_type, !!sym(names(clmn)), fill = lec_type, color = lec_type)) +
+  ggplot(aes(lec_type, !!sym(names(score_clmn)), fill = lec_type, color = lec_type)) +
   geom_boxplot(
     size = 1, outlier.size = 1.5, outlier.alpha = 1,
     alpha = 0.5, width = 0.55,
@@ -300,7 +317,7 @@ count_bxs <- bx_dat %>%
   scale_y_continuous(expand = expansion(c(0.05, 0.2)), trans = "log10") +
   scale_fill_manual(values = lec_type_cols) +
   scale_color_manual(values = lec_type_cols) +
-  labs(y = clmn) +
+  labs(y = score_clmn) +
   base_theme +
   theme(
     plot.margin     = margin(5, 5, 5, 35),
@@ -318,20 +335,6 @@ count_bxs <- plot_grid(
   ncol = 1,
   rel_heights = c(1, 1)
 )
-
-
-
-# 84/191	632/15076	6.588999771563824e-65
-# 
-# data.frame(
-#   up    = c(84, 191 - 84),
-#   other = c(632, 15076 - 632),
-#   row.names = c("in_term", "out_term")
-# ) %>%
-#   t() %>%
-#   # chisq.test() %>%
-#   fisher.test(alternative = "t") %>%
-#   tidy()
 ```
 
 ```{r "fig 1 examples", fig.width = 3, fig.height = 5}
@@ -397,7 +400,7 @@ madcam_bxs <- plt_dat %>%
 
 ```{r "fig 1", fig.width = 16, fig.height = 12}
 top <- plot_grid(
-  pct_chikv_umap, chikv_typs_u,
+  chikv_score_umap, chikv_typs_umap,
   labels = c("A", "B"), label_size = ttl_pt2 * 1.5,
   nrow   = 1,
   align  = "h",
@@ -464,9 +467,9 @@ so_24 %>%
 
 ### Enriched counts
 
-The CHIKV score shown in figures 1A and C is calculated by dividing CHIKV counts from the CHIKV-capture library by total mouse counts from the CHIKV-capture library for each cell. For this calculation we are assuming that mouse counts from the capture library reflect relative mouse counts from the original libraries.
+The CHIKV score shown in figures 1A and C is calculated by dividing CHIKV counts from the CHIKV-capture library by total counts (CHIKV + mouse) from the CHIKV-capture library for each cell. For this calculation we are assuming that mouse counts from the capture library reflect relative mouse counts from the original libraries (i.e. the relationship between CHIKV counts and mouse counts has not been affected by CHIKV enrichment).
 
-There is a strong correlation between counts from the capture and original libraries, this validates the use of mouse counts from the capture libraries as a normalization factor.
+There is a strong correlation between mouse counts from the capture libraries and original libraries, this validates the use of mouse counts from the capture libraries as a normalization factor.
 
 ```{r, fig.width = 6, fig.height = 6}
 cnt_dat <- plt_dat@meta.data %>%
@@ -509,21 +512,13 @@ cnt_dat %>%
 ## Figure S2
 
 ```{r "UMAPs", fig.width = 10, fig.height = 10}
-# Pseudo count for pct_mito
-pseudo <- so_24$pct_mito
-pseudo <- min(pseudo[pseudo > 0]) / 2
-
 # Format data
-dat <- so_24@meta.data %>%
+figS2_dat <- so_24@meta.data %>%
   as_tibble(rownames = "cell_id") %>%
-  mutate(pct_mito = pct_mito + pseudo) %>%
   arrange(CHIKV_sgRNA_fc)
 
-chikv_dat <- dat %>%
-  filter(chikv_grp == chikv_grps[2])
-
 # Coordinates for circle
-circ_coords <- dat %>%
+circ_coords <- figS2_dat %>%
   filter(
     treatment == treats[2],
     cell_type_2 == "LEC"
@@ -535,7 +530,7 @@ circ_coords <- dat %>%
   )
 
 # Cell type UMAP
-type_umap <- dat %>%
+type_umap <- figS2_dat %>%
   plot_scatter(
     "lec_type",
     plot_colors  = lec_type_cols,
@@ -558,7 +553,7 @@ type_umap <- dat %>%
   )
   
 # sgRNA ratio UMAP
-sgRNA_umap <- dat %>%
+sgRNA_umap <- figS2_dat %>%
   ggplot(aes(UMAP_1, UMAP_2, fill = CHIKV_sgRNA_fc)) +
   geom_point_trace(
     color = "grey",
@@ -573,8 +568,13 @@ sgRNA_umap <- dat %>%
     linetype  = 2,
     linewidth = 0.75
   ) +
-  scale_fill_gradientn(colours = c("white", "#0072B2", "#002037"), labels = scales::label_number()) +
-  guides(fill = guide_colorbar(title.position = "top", ticks = FALSE, title = "CHIKV sgRNA ratio")) +
+  scale_fill_gradientn(
+    colours = c("white", "#0072B2", "#002037"),
+    labels = scales::label_number()
+  ) +
+  guides(fill = guide_colorbar(
+    title.position = "top", ticks = FALSE, title = "CHIKV sgRNA ratio"
+  )) +
   umap_theme +
   theme(
     aspect.ratio         = 0.9,
@@ -587,137 +587,43 @@ sgRNA_umap <- dat %>%
   )
 ```
 
-```{r "scatter plots v1", fig.width = 10, fig.height = 7, eval = FALSE}
-# ONLY PLOT CHIKV-HIGH CELLS
-# Shouldn't include any CHIKV-low cells, since they have been filtered
-# stringently based on QC and CHIKV-high cells have not. This would influence
-# correlations
+```{r "scatter plots", fig.width = 10, fig.height = 7}
+# Only plot CHIKV-high cells
+# Do not include any CHIKV-low cells since they have been filtered
+# stringently based on QC and CHIKV-high cells have not. Including CHIKV-low
+# cells would influence correlations
 
 # Stats to plot
 y_vars <- c(
   "# mouse genes\nexpressed" = "nFeature_RNA",
-  "% mitochondrial\nreads" = "pct_mito"
-)
-
-x_var <- "CHIKV_sgRNA_fc"
-typs  <- c("Marco_LEC", "BEC", "PvC", "unassigned-LEC")
-
-# Scatter plots
-plt_dat <- chikv_dat %>%
-  filter(lec_type %in% typs) %>%
-  mutate(lec_type = fct_relevel(lec_type, typs)) %>%
-  dplyr::rename(!!!syms(y_vars)) %>%
-  pivot_longer(all_of(names(y_vars))) %>%
-  group_by(lec_type, name) %>%
-  mutate(
-    cor = cor(log10(!!sym(x_var)), log10(value)),
-    cor = str_c("r = ", round(cor, 2))
-  ) %>%
-  ungroup()
-
-scatter <- plt_dat %>%
-  split(.$lec_type) %>%
-  unname() %>%
-  imap(~ {
-    clmn <- .y
-    
-    .x <- .x %>%
-      split(.$name)
-    
-    top <- names(.x)[1]
-    
-    .x %>%
-      imap(~ {
-        if (clmn == 1) y_ttl <- .y
-        else           y_ttl <- NULL
-        
-        ttl <- NULL
-        sub <- NULL
-        x_ttl <- NULL
-        
-        if (.y == top) {
-          ttl   <- type_lab_fn(unique(.x$lec_type))
-          sub   <- str_c("n = ", nrow(.x))
-        }
-        
-        .x %>%
-          ggplot(aes(!!sym(x_var), value, color = lec_type)) +
-          geom_point() +
-          geom_smooth(
-            method = "lm", formula = y ~ x,
-            color = "black", linewidth = 0.5, linetype = 2, alpha = 0.2) +
-          geom_text(
-            aes(Inf, Inf, label = cor),
-            hjust = 1.2, vjust = 1.2,
-            color = "black",
-            check_overlap = TRUE
-          ) +
-          scale_color_manual(values = lec_type_cols) +
-          scale_x_log10() +
-          scale_y_log10(expand = expansion(c(0.05, 0.10))) +
-          labs(title = ttl, subtitle = sub, x = x_ttl, y = y_ttl) +
-          theme(aspect.ratio = 0.9) +
-          base_theme +
-          theme(
-            legend.position = "none",
-            axis.text.x = element_text(size = txt_pt1),
-            axis.text.y = element_text(size = txt_pt1)
-          )
-      })
-  }) %>%
-  flatten()
-
-# x-axis title
-x_ttl <- scatter[[1]] +
-  labs(title = "CHIKV sgRNA ratio") +
-  theme(
-    plot.title = element_text(hjust = 0.5, vjust = 1, size = ttl_pt2)
-  )
-
-x_ttl <- get_title(x_ttl)
-
-# Create final figure
-scatter <- scatter %>%
-  wrap_plots(byrow = FALSE, nrow = 2)
-
-scatter <- list(scatter, x_ttl) %>%
-  wrap_plots(ncol = 1, heights = c(1, 0.1))
-```
-
-```{r "scatter plots v2", fig.width = 10, fig.height = 7}
-# ONLY PLOT CHIKV-HIGH CELLS
-# Shouldn't include any CHIKV-low cells, since they have been filtered
-# stringently based on QC and CHIKV-high cells have not. This would influence
-# correlations
-
-# Stats to plot
-y_vars <- c(
-  "# mouse genes\nexpressed" = "nFeature_RNA",
-  "% mitochondrial\nreads" = "pct_mito"
+  "% mitochondrial\nreads"   = "pct_mito"
 )
 
 x_var <- c("CHIKV sgRNA ratio" = "CHIKV_sgRNA_fc")
 typs  <- c("Marco_LEC", "unassigned-LEC")
 
-# Scatter plots
-plt_dat <- chikv_dat %>%
-  filter(lec_type %in% typs) %>%
+# Format scatter plot data
+plt_dat <- figS2_dat %>%
+  filter(
+    chikv_grp == chikv_grps[2],
+    lec_type %in% typs
+  ) %>%
   mutate(lec_type = fct_relevel(lec_type, typs)) %>%
   dplyr::rename(!!!syms(y_vars)) %>%
   pivot_longer(all_of(names(y_vars)))
 
+# Scatter plots
 scatter <- plt_dat %>%
   split(.$name) %>%
   imap(~ {
-    
     log_trans <- grepl("mouse genes", .y)
+    
+    y_fn    <- function(x) x
+    y_trans <- "identity"
     
     if (log_trans) {
       y_fn    <- log10
       y_trans <- "log10"
-    } else {
-      y_fn    <- function(x) x
-      y_trans <- "identity"
     }
     
     n_lab <- get_nlab_fun(.x, "lec_type", l = "\n", r = "")
@@ -729,15 +635,14 @@ scatter <- plt_dat %>%
           method = "pearson",
           alternative = "two.sided"
         ))),
-        
+
         pval = map_dbl(cor, pull, p.value),
         pval = format_pvalue(pval),
         pval = str_c("italic(p) == ", pval),
         cor  = map_dbl(cor, pull, estimate),
         cor  = str_c("italic(r) == ", round(cor, 2))
-        # cor  = str_c(cor, " ~ ", pval)
       )
-    
+
     .x %>%
       ggplot(aes(!!sym(unname(x_var)), value, color = lec_type)) +
       geom_point() +
@@ -774,13 +679,9 @@ scatter <- scatter %>%
 ```
 
 ```{r "fracion CHIKV-high"}
-# Format plot data
-# only include cell types with >40 cells
-plt_dat <- dat %>%
-  filter(treatment == treats[2])
-
 # Fraction CHIKV-high cells
-frac_dat <- plt_dat %>%
+frac_dat <- figS2_dat %>%
+  filter(treatment == treats[2]) %>%
   group_by(lec_type, rep) %>%
   summarize(
     rep_n    = length(chikv_grp[chikv_grp == chikv_grps[2]]),
@@ -945,9 +846,9 @@ bx_comps %>%
 CHIKV may target MARCO-expressing LECs for infection
 
 A.  UMAP projection shows annotated cell types for the 24 hpi timepoint.
-B.  UMAP projection shows CHIKV sgRNA ratio (sgRNA counts / 5' counts) for the 24 hpi timepoint.
-C.  The fraction of cells identified as CHIKV-high is shown for each cell type for the 24 hpi timepoint. Labels show the number of CHIKV-high cells/total cells.
-D.  CHIKV sgRNA ratio is shown for cells with >0 sgRNA counts and >0 5' counts. Cell types with >40 cells are shown.
+B.  UMAP projection shows CHIKV sgRNA ratio (sgRNA counts / 5' counts) for the 24 hpi timepoint. A pseudo count of 1 was added to the sgRNA and 5' counts to elminate division by zero.
+C.  The fraction of cells identified as CHIKV-high is shown for each biological replicate for cell types with >40 total cells and >3 CHIKV-high cells for the 24 hpi timepoint. Labels show the number of CHIKV-high cells/total cells. P values were calculated using a one-sided hypergeometric test with Bonferroni correction to determine whether the frequency of CHIKV-high cells was greater than expected for each cell type. Only adjusted p values <0.05 are shown.
+D.  CHIKV sgRNA ratio is shown for cells with >0 sgRNA counts, >0 5' counts, and >40 total cells. P values were calculated using a two-sided Wilcoxon rank sum test with Bonferroni correction. For each violin plot, the central point and flanking lines represent medians and the interquartile range (IQR), respectively.
 E.  The correlation between CHIKV sgRNA ratio and QC metrics is shown for CHIKV-high cells for Marco LECs and unassigned LECs.
 
 ```{r "fig S2", fig.width = 16, fig.height = 14}
