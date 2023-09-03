@@ -2089,32 +2089,6 @@ so_merge_df <- read_tsv(file.path(params$so_dir, "so_merge.tsv.gz"))
 
 so_merge_df <- so_merge_df %>%
   mutate(tm_treat = str_c(tm, "-", treatment))
-
-
-
-# Set cell type column for LECs/BECs/FRCs
-# NEED TO REMAKE OBJECTS WITH THIS COLUMN ADDED
-so_8 <- so_8 %>%
-  mutate_meta(
-    mutate,
-    cell_type_2 = case_when(
-      lec_type %in% c("BEC", "FRC") ~ lec_type,
-      lec_type == "PvC"             ~ "FRC",
-      cell_type %in% lec_cell_types ~ "LEC",
-      TRUE                          ~ lec_type
-    )
-  )
-
-so_24 <- so_24 %>%
-  mutate_meta(
-    mutate,
-    cell_type_2 = case_when(
-      lec_type %in% c("BEC", "FRC") ~ lec_type,
-      lec_type == "PvC"             ~ "FRC",
-      cell_type %in% lec_cell_types ~ "LEC",
-      TRUE                          ~ lec_type
-    )
-  )
 ```
 
 ```{r "theme"}
