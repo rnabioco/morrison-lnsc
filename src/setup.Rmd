@@ -2060,7 +2060,8 @@ so_merge <- so_merge %>%
       TRUE                          ~ lec_type
     ),
     tm_treat = str_c(tm, "-", treatment)       # tm-treatment label for fig S3   
-  )
+  ) %>%
+  AddMetaData(FetchData(., c("hUMAP_1", "hUMAP_2")))
 
 # Add subsets to 8 and 24 hpi objects
 clmns <- c(
