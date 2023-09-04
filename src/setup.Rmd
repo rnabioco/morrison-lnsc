@@ -2037,7 +2037,7 @@ so_lec <- so_lec %>%
   )
 
 # Add LEC subsets to object
-# Identify CHIKV-high subsets
+# identify CHIKV-high subsets
 so_merge <- so_merge %>%
   AddMetaData(FetchData(so_lec, "lec_subtype")) %>%
   mutate_meta(
@@ -2047,19 +2047,24 @@ so_merge <- so_merge %>%
     lec_subtype = replace_na(lec_subtype, "other"),
     
     chikv_type = if_else(chikv_grp == chikv_grps[2], lec_type, chikv_grp),
-    
-    # Labels for LECs, BECs, and FRCs
-    cell_type_2 = case_when(
+)
+
+# Misc meta.data labels
+so_merge <- so_merge %>%
+  mutate_meta(
+    mutate,
+    cell_type_2 = case_when(                   # labels for LECs, BECs, and FRCs
       lec_type %in% c("BEC", "FRC") ~ lec_type,
       lec_type == "PvC"             ~ "FRC",
       cell_type %in% lec_cell_types ~ "LEC",
       TRUE                          ~ lec_type
-    )
-)
+    ),
+    tm_treat = str_c(tm, "-", treatment)       # tm-treatment label for fig S3   
+  )
 
 # Add subsets to 8 and 24 hpi objects
 clmns <- c(
-  "cell_type", "cell_type_2",
+  "cell_type", "cell_type_2", "tm_treat",
   "lec_type",  "lec_subtype",
   "frc_type",  "frc_subtype",
   "chikv_type"
@@ -2088,7 +2093,7 @@ so_24    <- qread(file.path(params$so_dir, "so_24.qs"))
 so_merge_df <- read_tsv(file.path(params$so_dir, "so_merge.tsv.gz"))
 
 so_merge_df <- so_merge_df %>%
-  mutate(tm_treat = str_c(tm, "-", treatment))
+  mutate()
 ```
 
 ```{r "theme"}

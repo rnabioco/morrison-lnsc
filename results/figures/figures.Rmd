@@ -762,7 +762,7 @@ frac_24 <- frac_dat %>%
 # eliminate division by zero
 # For violin plots do not need to add pseudo count since we are filtering to
 # remove cells with 0 counts
-bx_dat <- plt_dat %>%
+bx_dat <- figS2_dat %>%
   filter(
     CHIKV_sgRNA > 0,
     CHIKV_5 > 0
@@ -808,11 +808,18 @@ sgRNA_boxes <- bx_dat %>%
   )
 
 # Calculate p-values
+# p-values are corrected for all comparisons
+# write table with all p-values
 bx_p_vals <- bx_dat %>%
   calc_p_vals(
     data_column = "CHIKV_sgRNA_fc_raw",
     type_column = "lec_type"
   )
+
+p_file <- here("results/tables/figS2_sgRNA_pval.tsv")
+
+bx_p_vals %>%
+  write_tsv(p_file)
 
 # Comparisons for p-value labels
 bx_comps <- bx_lvls %>%
@@ -1105,7 +1112,8 @@ typ_bx_dat <- list("8hpi" = so_8, "24hpi" = so_24) %>%
   imap_dfr(~ {
     clmns <- c(
       "cell_type", "lec_type", "frc_type",
-      "treatment", "orig.ident", "rep", "chikv_grp", gns
+      "treatment", "tm_treat", "orig.ident", "rep", "chikv_grp",
+      gns
     )
     
     .x %>%
@@ -1114,7 +1122,6 @@ typ_bx_dat <- list("8hpi" = so_8, "24hpi" = so_24) %>%
       mutate(
         tm = .y,
         tm = fct_relevel(tm, tms),
-        tm_treat = str_c(tm, "-", treatment),
         tm_treat = fct_relevel(tm_treat, unlist(map(tms, str_c, "-", treats)))
       )
   })
