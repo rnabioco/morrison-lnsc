@@ -1339,8 +1339,6 @@ stopifnot(identical(rownames(ref_lymphnodestromal), rownames(ref_frc)))
 ref_frc <- cbind(ref_lymphnodestromal, ref_frc)
 ```
 
-
-
 ```{r "create 8hpi object", include = FALSE, eval = create_obj}
 # Create Seurat object
 mats <- here(params$unenr_dir) %>%
@@ -1391,9 +1389,8 @@ sobjs <- sobjs %>%
   })
 
 # Filter, normalize, and merge objects
-# CELL CALLS FROM CELLRANGER DO NOT LOOK AS ACCURATE FOR AF2 (CHIKV-2)
-# REMOVE CELLS WITH <= 800 UMIs
-# SHOULD MODIFY CODE TO CHANGE QC CLASS FOR RAW OBJECT!!
+# cell calls from cellranger do not look as accurate for AF2 (CHIKV-2)
+# to account for this remove cells with <= 800 UMIs
 sobjs <- sobjs %>%
   map(~ {
     .x %>%
@@ -1555,8 +1552,6 @@ so_enr_df %>%
 
 rm(so_enr)
 ```
-
-
 
 ```{r "integrate samples", eval = create_obj}
 # Adjust 8 and 24 hpi objects
@@ -1779,7 +1774,6 @@ cluster_param_results <- clst_params %>%
         cluster_col = clmn,
         n_genes     = n_gns,
         threshold   = 0.55,
-        # threshold   = 0.6,
         compute_method    = args$met,
         pseudobulk_method = args$bulk
       )
@@ -1858,38 +1852,6 @@ cluster_param_results <- clst_params %>%
     
     res
   })
-
-# # TESTING SEURAT INTEGRATION
-# so_lec <- so_lec %>%
-#   map(~ {
-#     .x %>%
-#       SplitObject("treatment") %>%
-#       map(~ {
-#         .x %>%
-#           NormalizeData() %>%
-#           FindVariableFeatures(nfeatures = 2000)
-#       })
-#   }) %>%
-#   flatten()
-# 
-# int_features <- so_lec %>%
-#   SelectIntegrationFeatures()
-# 
-# int_anchors <- so_lec %>%
-#   FindIntegrationAnchors(anchor.features = int_features)
-# 
-# so_int <- IntegrateData(anchorset = int_anchors)
-# 
-# DefaultAssay(so_int) <- "integrated"
-# 
-# so_int <- so_int %>%
-#   ScaleData() %>%
-#   RunPCA() %>%
-#   RunUMAP(reduction = "pca", dims = 1:40)
-# 
-# so_int %>%
-#   plot_scatter("lec_type", size = 0.5) +
-#   facet_grid(tm ~ treatment)
 ```
 
 ```{r "lec consensus annotations", eval = create_obj}
@@ -2003,7 +1965,7 @@ ann_clst_plots <- ann_clst_res %>%
 
 ```{r "lec refined annotations", eval = create_obj}
 # Use representative settings identified from consensus annotations
-lec_clst <- str_c("RNA_snn_res.", 11.5)
+lec_clst <- str_c("RNA_snn_res.", params$lec_res)
 
 so_lec <- so_lec %>%
   mutate_meta(dplyr::select, -starts_with("UMAP_")) %>%
@@ -2015,7 +1977,6 @@ so_lec <- so_lec %>%
    )
 
 # Adjust clusters based on Marco expression
-# lec_clst <- str_c("RNA_snn_res.", params$lec_res)
 so_lec <- so_lec %>%
   mutate_meta(mutate, lec_subtype = type) %>%
   classify_markers(
@@ -2249,215 +2210,4 @@ new_cell_labs <- c(
 )
 
 marco_expr <- c(Marco_LEC = "\"Marco\"^\"+\"*\" LEC\"")
-```
-
-
-
-```{r "prepare 8hpi object", eval = FALSE}
-
-lec_cell_types <- "Endothelial cells"
-frc_cell_types <- c("Fibroblasts", "Stromal cells", "Stromal cells (DN)")
-
-so_8_dir <- here(params$so_dir, "so_8.qs")
-
-rslns <- c(1, 2, 4, 5)
-
-fib_clsts <- rslns %>%
-  set_clst_names("fib_")
-
-fib_clst_clmn <- fib_clsts %>%
-  pluck(as.character(params$fib_res), "clst")
-
-if (!file.exists(so_8_dir)) {
-  so_8 <- read_rds(file.path(params$orig_so_dir, "2021-07-16/sobjs/so.rds"))
-  
-  # Cluster 27 appears to be FRCs based on Pdpn, Pecam1, and Pdgfra
-  # Clusters 10 and 22 appear to be BECs based on Pdpn and Pecam1
-  so_8 <- so_8 %>%
-    mutate_meta(
-      mutate,
-      cell_type = ifelse(RNA_snn_res.5 == "27", "Fibroblasts", cell_type),
-      cell_type = ifelse(RNA_snn_res.5 %in% c("10", "22"), "Endothelial cells", cell_type)
-    )
-  
-  # Classify non-endothelial stromal cell types
-  # ref_frc is ref_lymphnodestromal with immgen fibroblast references added
-  so_fib <- so_8 %>%
-    subset_sobj(
-      subset       = cell_type %in% frc_cell_types,
-      rsln         = rslns,
-      dims         = 1:40
-      # regress_vars = "nCount_RNA"
-    )
-  
-  fib_clsts %>%
-    iwalk(~ {
-      so_fib <<- so_fib %>%
-        mutate_meta(dplyr::select, -UMAP_1, -UMAP_2) %>%
-        clustify(
-          # ref_mat       = ref_lymphnodestromal,
-          ref_mat       = ref_frc,
-          cluster_col   = .x$clst,
-          rename_prefix = .x$type,
-          threshold     = 0.65
-        )
-    })
-  
-  # Set fibroblast/stromal cell types
-  fib_clmn <- as.character(params$fib_res)
-  fib_clmn <- fib_clsts[[fib_clmn]]$type
-  fib_clmn <- str_c(fib_clmn, "_type")
-  
-  so_fib <- so_fib %>%
-    mutate_meta(
-      mutate,
-      fib_type = !!sym(fib_clmn),
-      
-      fib_type_clst = if_else(
-        fib_type == "unassigned",
-        str_c(fib_type, "-", !!sym(fib_clst_clmn)),
-        fib_type
-      )
-    )
-  
-  so_fib_24 <- so_24 %>%
-    subset_sobj(
-      subset       = fib_subtype != "other",
-      rsln         = rslns,
-      dims         = 1:40
-      # regress_vars = "nCount_RNA"
-    )
-  
-  so_fib_24 <- so_fib_24 %>%
-    RunHarmony("treatment", lambda = 0.01) %>%
-    RunUMAP(reduction = "harmony", dims = 1:40)
-    
-    
-  
-  all_fib <- merge(so_fib, so_fib_24) %>%
-    FindVariableFeatures() %>%
-    ScaleData() %>%
-    RunPCA() %>%
-    RunUMAP(reduction = "pca", dims = 1:40)
-    
-  # Add fibroblast/stromal subtypes back to original object
-  so_8 <- so_8 %>%
-    AddMetaData(
-      metadata = so_fib$fib_type,
-      col.name = "fib_type"
-    ) %>%
-    mutate_meta(
-      mutate,
-      fib_subtype = replace_na(fib_type, "other"),
-      fib_type    = recode(lec_type, "unassigned" = "unassigned-fib"),  # THIS IS A TYPO
-      fib_type    = if_else(fib_subtype == "other", cell_type, fib_type),
-      subtype     = if_else(fib_subtype == "other", subtype, fib_type)
-    )
-}
-```
-
-```{r "prepare 24hpi object", eval = FALSE}
-# Directories to save modified objects
-so_24_dir <- here(params$so_dir, "so_24.qs")
-
-# Replace this with setup.Rmd that has code used to process each sample
-if (!file.exists(so_24_dir)) {
-  so_24 <- read_rds(file.path(params$orig_so_dir, "2021-01-08/sobjs/so.rds"))
-  
-  # Adjust 24 hpi
-  # Add PvCs to cell types
-  # This is based on clustifyr results using ref_lymphnodestromal, and Pecam1,
-  # Pdpn, Itga7, and Acta2 expression
-  so_24 <- so_24 %>%
-    mutate_meta(
-      mutate,
-      cell_type = case_when(
-        fib_type == "PvC"             ~ fib_type,
-        cell_type %in% frc_cell_types ~ "FRC",
-        TRUE                          ~ cell_type
-      )
-    )
-  
-  so_24 <- so_24 %>%
-    mutate_meta(
-      mutate,
-      lec_subtype = recode(lec_subtype, unassigned = "unassigned-LEC"),
-      lec_type = case_when(
-        cell_type %in% lec_cell_types ~ lec_subtype,
-        TRUE                          ~ cell_type
-      )
-    )
-  
-  so_24 <- so_24 %>%
-    mutate_meta(
-      mutate,
-      subtype = ifelse(lec_subtype == "other", fib_subtype, lec_subtype)
-    )
-  
-  so_24 <- so_24 %>%
-    mutate_meta(
-      mutate,
-      chikv_type = if_else(chikv_grp == chikv_grps[2], lec_type, chikv_grp)
-    )
-  
-  # Adjust 8 hpi
-  # Cluster 27 appears to be FRCs based on Pdpn, Pecam1, and Pdgfra
-  # Adjust subtype column
-  so_8 <- so_8 %>%
-    mutate_meta(
-      mutate,
-      fib_type = if_else(fib_subtype == "other", cell_type, fib_subtype),
-      cell_type = case_when(
-        fib_type == "PvC"             ~ fib_type,
-        cell_type %in% frc_cell_types ~ "FRC",
-        TRUE                          ~ cell_type
-      )
-    )
-  
-  so_8 <- so_8 %>%
-    mutate_meta(
-      mutate, 
-      orig.ident = str_c(treatment, "-", rep),
-      lec_type = case_when(
-        lec_subtype == "unassigned"   ~ lec_subtype,  # replace unassigned-LEC label
-        cell_type %in% lec_cell_types ~ lec_subtype,
-        TRUE                          ~ cell_type
-      ),
-      chikv_grp = ifelse(tot_nCount_CHIKV > 0, chikv_grps[2], chikv_grps[1])
-    )
-  
-  so_8 <- so_8 %>%
-    mutate_meta(
-      mutate,
-      subtype = ifelse(lec_subtype == "other", fib_subtype, lec_subtype)
-    )
-  
-  ### NEED TO UPDATE THIS FOR SUBTYPES ###
-  # add cluster to so_fib, re-cluster, re-annotate
-  so_8 <- so_8 %>%
-    mutate_meta(
-      mutate,
-      lec_type  = ifelse(RNA_snn_res.5 == "27", "FRC", lec_type),
-      cell_type = ifelse(RNA_snn_res.5 == "27", "FRC", cell_type)
-    )
-  
-  # Save objects
-  qsave(so_8, so_8_dir)
-  qsave(so_24, so_24_dir)
-  
-  rm(so_8, so_24)
-}
-
-so_8  <- qread(so_8_dir)
-so_24 <- qread(so_24_dir)
-
-so_merge_df <- bind_rows(so_8@meta.data, so_24@meta.data)
-
-# Load LEC objects
-so_lec_8  <- read_rds(file.path(params$orig_so_dir, "2021-07-16/sobjs/so_lec.rds"))
-so_lec_24 <- read_rds(file.path(params$orig_so_dir, "2021-01-08/sobjs/so_lec.rds"))
-
-# Set levels
-sam_lvls <- unique(so_24$orig.ident)
-treats   <- unique(so_24$treatment)
 ```

@@ -176,12 +176,29 @@ get_cell_types <- function(so_in, type_clmn, sample_clmn, n_cells = 3) {
 #' were drawn than expected
 #' @export
 .calc_fisher <- function(x, k, m, n, alt = "greater") {
-  k <- k - x
-  m <- m - x
-  n <- n - k
+  tot <- m + n
+  k   <- k - x
+  m   <- m - x
+  n   <- n - k
   
-  res <- c(x, k, m, n) %>%
-    matrix(nrow = 2) %>%
+  # Example contingency table
+  # the sum of the matrix should equal the total number of cells
+  # 23  244  | 267
+  # 51  3235 | 3286
+  #
+  # 74  3479 | 3553
+  
+  mat <- c(x, k, m, n) %>%
+    matrix(nrow = 2)
+  
+  if (sum(mat) != tot) {
+    stop(
+      "To create contingency table, the following must be TRUE: ",
+      "x + (k - x) + (m - x) + (n - k + x) == m + n"
+    )
+  }
+  
+  res <- mat %>%
     fisher.test(alternative = alt)
   
   res$p.value
