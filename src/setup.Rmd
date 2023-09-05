@@ -36,6 +36,7 @@ library(tidyverse)
 library(here)
 library(knitr)
 library(broom)
+library(cli)
 
 source(here(params$src_dir, "funs.R"))
 ```
@@ -628,12 +629,21 @@ get_degs <- function(so_in, ident_1 = "CHIKV", ident_2 = "mock",
                      rep_clmn = "rep", exclude_types = c("other", "unassigned"),
                      file = NULL) {
   
+  # Format input data
   Idents(so_in) <- unlist(so_in[[treat_clmn]], use.names = FALSE)
   
   so_in <- so_in %>%
     mutate_meta(mutate, treat_rep = str_c(!!sym(treat_clmn), !!sym(rep_clmn)))
   
-  typs <- get_cell_types(so_in, type_clmn, "treat_rep")
+  # Identify cell types with >3 cells in all replicates/samples
+  # exclude cell types in exclude_types, e.g. unassigned
+  typs <- so_in %>%
+    get_cell_types(
+      type_clmn    = type_clmn,
+      sample_clmn = "treat_rep",
+      n_cells     = 3
+    )
+  
   typs <- typs[!typs %in% exclude_types]
   
   if (!is.null(file) && file.exists(file)) {
@@ -641,6 +651,9 @@ get_degs <- function(so_in, ident_1 = "CHIKV", ident_2 = "mock",
     
     return(read_tsv(file))
   }
+  
+  # Identify DEGs
+  only_pos <- all(log_fc > 0)
   
   degs <- typs %>%
     map_dfr(~ {
@@ -651,16 +664,21 @@ get_degs <- function(so_in, ident_1 = "CHIKV", ident_2 = "mock",
           ident.2         = ident_2,
           grouping.var    = rep_clmn,
           logfc.threshold = min(abs(log_fc)),
+          only.pos        = only_pos,
           min.cells.group = 3
         ) %>%
         mutate(!!sym(type_clmn) := .x) %>%
         as_tibble(rownames = "gene")
     })
   
+  # Filter DEGs
+  # genes are only reported with fold change within log_fc for all replicates
+  # and max_pval for replicates <pval
+  # since we are combining p-values from multiple replicates, it is reasonable
+  # to use the max unadjusted p-value for filtering
   reps     <- unique(unlist(so_in[[rep_clmn]], use.names = FALSE))
   fc_clmns <- str_c(reps, "_avg_log2FC")
   
-  # Filter DEGs
   degs <- degs %>%
     filter(
       if_all(all_of(fc_clmns), ~ .x > log_fc[1] & .x < log_fc[2]),
@@ -668,9 +686,7 @@ get_degs <- function(so_in, ident_1 = "CHIKV", ident_2 = "mock",
     ) %>%
     arrange(max_pval)
 
-  if (!is.null(file)) {
-    write_tsv(degs, file)
-  }
+  if (!is.null(file)) write_tsv(degs, file)
   
   degs
 }
@@ -681,7 +697,8 @@ get_degs <- function(so_in, ident_1 = "CHIKV", ident_2 = "mock",
 #' This will include results for all terms regardless of significance, need
 #' all terms for creating heatmaps
 #' 
-#' @param gns Named list of differentially expressed genes for each cell type
+#' @param gns Named list of differentially expressed genes for each cell type,
+#' names should correspond to cell type labels found in type_clmn
 #' @param so_in Seurat object so use for determining background gene set
 #' @param type_clmn Column in Seurat object containing cell types, these should
 #' match the cell types provided by gns
@@ -693,16 +710,19 @@ get_degs <- function(so_in, ident_1 = "CHIKV", ident_2 = "mock",
 #' @param n_bkgd Number of top expressed genes to include for the background
 #' gene set
 #' @param exclude_genes Regular expression to use for removing genes before
-#' performing GO analysis
+#' performing GO analysis, by default ribo protein and mito genes are excluded
+#' @param org_db Bioconductor organism annotation database, should be class
+#' OrgDb
 #' @param sim_data Similarity data to use for simplifying GO terms, generated
 #' using [clusterProfiler::godata()]
 #' @param file Path to output file for saving results
 get_go <- function(gns, so_in, type_clmn = "subtype", max_term_size = 750,
                    min_term_size = 10, db = "BP", simplify_terms = TRUE,
                    n_bkgd = Inf, exclude_genes = "^(Rp[sl]|mt-)",
-                   sim_data = go_sim_data, file = NULL) {
-
+                   org_db = org.Mm.eg.db, sim_data = go_sim_data, file = NULL) {
+  
   # Check for save GO file
+  # this function will save a tsv and a GO object
   obj_file <- str_c(file, ".qs")
   tbl_file <- str_c(file, ".tsv")
   
@@ -713,10 +733,13 @@ get_go <- function(gns, so_in, type_clmn = "subtype", max_term_size = 750,
   }
   
   # Identify background gene set for each cell type
+  # this includes all genes with >0 counts for any cell
   bkgd <- gns %>%
     imap(~ {
       bkgd <- NULL
       
+      # so_in is required to determine background gene list
+      # if gns is not named, all cells in so_in will be used
       if (!is.null(so_in)) {
         if (is.character(.y)) bkgd <- subset(so_in, !!sym(type_clmn) == .y)
         else                  bkgd <- so_in
@@ -727,6 +750,11 @@ get_go <- function(gns, so_in, type_clmn = "subtype", max_term_size = 750,
           head(n_bkgd)
         
         bkgd <- names(bkgd[bkgd > 0])
+        
+      } else {
+        cli::cli_warn(
+          "Background gene set can only be determined if so_in is provided"
+        )
       }
       
       bkgd
@@ -734,14 +762,14 @@ get_go <- function(gns, so_in, type_clmn = "subtype", max_term_size = 750,
   
   # Identify GO terms for each gene list
   # exclude specified genes
-  go <- gns %>%
+  go <- gns[1] %>%
     imap(~ {
       .x <- .x[!grepl(exclude_genes, .x)]
       
       g <- .x %>%
         enrichGO(
           keyType      = "SYMBOL",
-          OrgDb        = org.Mm.eg.db,
+          OrgDb        = org_db,
           universe     = bkgd[[.y]],
           maxGSSize    = max_term_size,
           minGSSize    = min_term_size,
@@ -751,9 +779,15 @@ get_go <- function(gns, so_in, type_clmn = "subtype", max_term_size = 750,
         )
       
       # Add background genes for each term to object
-      # need this to calculate overall fold enrichment for GO clusters
+      # * this column is formatted in the same way as the geneID column
+      # * these genes could be used to calculate overall fold enrichment for
+      #   each cell type for GO clusters, i.e. determine total number of unique
+      #   background genes overlapping all terms in the cluster
+      # * overall fold enrichment scores for each cell type were not used
+      #   in the final version of the GO heatmaps since the overall enrichment
+      #   scores are on a much different scale as the other enrichement scores
       bkgd_gns <- g@result$ID %>%
-        bitr(
+        clusterProfiler::bitr(         # used to fetch gene symbols for GO terms
           fromType = "GOALL", toType = "SYMBOL",
           OrgDb = org.Mm.eg.db
         ) %>%
@@ -783,6 +817,7 @@ get_go <- function(gns, so_in, type_clmn = "subtype", max_term_size = 750,
   
   # Simplify terms
   # this collapses terms that are very similar
+  # this is very slow
   if (simplify_terms) {
     go <- go %>%
       clusterProfiler::simplify(semData = sim_data)
@@ -820,9 +855,7 @@ get_clusters <- function(go_in, k = 3, pval = 0.05, qval = 0.2, n_overlap = 3,
                          min_term_size = -Inf, max_term_size = Inf,
                          exclude_cell_types = NULL) {
   
-  # Filter GO terms
-  # calculate summary stats for each term
-  # sort by number of cell types that share the term
+  # Identify significant GO terms
   go_in <- go_in %>%
     filter(p.adjust < pval, qvalue < qval, Count >= n_overlap)
   
@@ -831,15 +864,27 @@ get_clusters <- function(go_in, k = 3, pval = 0.05, qval = 0.2, n_overlap = 3,
       filter(!Cluster %in% exclude_cell_types)
   }
   
+  # Calculate summary stats for each term
+  # filter by min/max term size and number of cell types sharing the term
+  # sort by number of cell types that share the term
+  # these are the terms that will be used for clustering
   top_terms <- go_in@compareClusterResult %>%
-    separate(GeneRatio, into = c("n_ovlp", "tot_genes"), sep = "/", convert = TRUE) %>%
-    separate(BgRatio, into = c("n_bg_ovlp", "tot_bg_genes"), sep = "/", convert = TRUE) %>%
+    separate(
+      GeneRatio,
+      into = c("n_ovlp", "tot_genes"),   # split gene ratios 
+      sep = "/", convert = TRUE
+    ) %>%
+    separate(
+      BgRatio,
+      into = c("n_bg_ovlp", "tot_bg_genes"),
+      sep = "/", convert = TRUE
+    ) %>%
     mutate(
-      GeneRatio  = n_ovlp / tot_genes,
+      GeneRatio  = n_ovlp / tot_genes,   # calculate enrichment scores
       BgRatio    = n_bg_ovlp / tot_bg_genes,
       enrichment = GeneRatio / BgRatio
     ) %>%
-    filter(
+    filter(                              # filter based on term size
       n_bg_ovlp >= min_term_size,
       n_bg_ovlp <= max_term_size
     ) %>%
@@ -847,7 +892,7 @@ get_clusters <- function(go_in, k = 3, pval = 0.05, qval = 0.2, n_overlap = 3,
     group_by(Description, ID) %>%
     summarize(
       n          = n_distinct(Cluster),  # number of cell types with term
-      enrichment = mean(enrichment),      
+      enrichment = mean(enrichment),     # mean enrichment score
       p.adjust   = mean(p.adjust),       # mean p-value across cell types
       qvalue     = mean(qvalue),         # mean q-value across cell types
       .groups    = "drop"          
@@ -863,7 +908,7 @@ get_clusters <- function(go_in, k = 3, pval = 0.05, qval = 0.2, n_overlap = 3,
   
   # Calculate similarity metric for top terms
   # fill in upper triangle of matrix and filter terms
-  # only include significant terms shared with at least two cell types
+  # use top_terms determined previously
   go_dist <- go_in %>%
     pairwise_termsim(semData = sim_data) %>%
     .@termsim %>%
@@ -897,9 +942,9 @@ get_clusters <- function(go_in, k = 3, pval = 0.05, qval = 0.2, n_overlap = 3,
     arrange(cluster, desc(n), p.adjust)
   
   res <- list(
-    clusters = res,
-    object   = hc,
-    clusters_object = clst_obj
+    clusters = res,             # data.frame with cluster stats/assignments
+    object   = hc,              # hclust object
+    clusters_object = clst_obj  # vector of cluster assignments
   )
   
   res

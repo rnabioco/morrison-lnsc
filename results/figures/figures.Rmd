@@ -1512,8 +1512,8 @@ feats %>%
 
 ```{r "DEGs"}
 # Create merged object to compare CHIKV 24 hpi with 8 hpi
-# only use top two biological replicates with the most cells
-# set new replicate names
+# only use top two 24 hpi biological replicates with the most cells
+# set replicate names to match 8 hpi, this is required by FindConservedMarkers()
 top_reps <- as.character(so_24$rep) %>%
   table() %>%
   sort() %>%
@@ -1528,17 +1528,15 @@ new_reps <- set_names(
 so_merge <- so_24 %>%
   subset(treatment == "CHIKV") %>%
   subset(rep %in% names(new_reps)) %>%
-  mutate_meta(~ {
-    .x %>%
-      mutate(
-        rep = recode(rep, !!!new_reps),
-        treatment = "24hpi"
-      )
-  })
-
+  mutate_meta(
+    mutate,
+    rep = recode(rep, !!!new_reps),
+    treatment = tm
+  )
+  
 so_merge <- so_8 %>%
   subset(treatment == "CHIKV") %>%
-  mutate_meta(mutate, treatment = "8hpi") %>%
+  mutate_meta(mutate, treatment = tm) %>%
   merge(so_merge)
 
 # Create objects to compare CHIKV-low/-high cells
@@ -1550,27 +1548,28 @@ so_24_chikv <- so_24 %>%
 
 # Identify up/down regulated genes
 # use FindConservedMarkers()
+# genes are filtered based on log_fc and maximum raw p-value (not adjusted)
 deg_args <- tribble(
   ~so_in,        ~type_clmn, ~treat_clmn, ~ident_1,     ~ident_2,    ~log_fc,
-  "so_8",        "lec_type", "treatment", "CHIKV",      "mock",      c(0.15, Inf),
-  "so_8",        "lec_type", "treatment", "CHIKV",      "mock",      c(-Inf, -0.15),
-  "so_24",       "lec_type", "treatment", "CHIKV",      "mock",      c(0.25, Inf),
+  "so_8",        "lec_type", "treatment", "CHIKV",      "mock",      c(0.15, Inf),    # 8hpi-mock up/down 
+  "so_8",        "lec_type", "treatment", "CHIKV",      "mock",      c(-Inf, -0.15),      
+  "so_24",       "lec_type", "treatment", "CHIKV",      "mock",      c(0.25, Inf),    # 24hpi-mock up/down
   "so_24",       "lec_type", "treatment", "CHIKV",      "mock",      c(-Inf, -0.25),
-  "so_merge",    "lec_type", "treatment", "24hpi",      "8hpi",      c(0.25, Inf),
+  "so_merge",    "lec_type", "treatment", "24hpi",      "8hpi",      c(0.25, Inf),    # 24hpi-8hpi up/down
   "so_merge",    "lec_type", "treatment", "24hpi",      "8hpi",      c(-Inf, -0.25),
-  "so_8_chikv",  "lec_type", "chikv_grp", "CHIKV-high", "CHIKV-low", c(0.15, Inf),
-  "so_24_chikv", "lec_type", "chikv_grp", "CHIKV-high", "CHIKV-low", c(0.15, Inf),
+  "so_8_chikv",  "lec_type", "chikv_grp", "CHIKV-high", "CHIKV-low", c(0.15, Inf),    # 8hpi  CHIKV-high/low up
+  "so_24_chikv", "lec_type", "chikv_grp", "CHIKV-high", "CHIKV-low", c(0.15, Inf),    # 24hpi CHIKV-high/low up
   
-  "so_8",        "cell_type_2", "treatment", "CHIKV",   "mock",      c(0.15, Inf),
+  "so_8",        "cell_type_2", "treatment", "CHIKV",   "mock",      c(0.15, Inf),    # 8hpi-mock up/down broad cell types
   "so_8",        "cell_type_2", "treatment", "CHIKV",   "mock",      c(-Inf, -0.15),
-  "so_merge",    "cell_type_2", "treatment", "24hpi",   "8hpi",      c(0.25, Inf),
+  "so_merge",    "cell_type_2", "treatment", "24hpi",   "8hpi",      c(0.25, Inf),    # 24hpi-8hpi up/down broad cell types
   "so_merge",    "cell_type_2", "treatment", "24hpi",   "8hpi",      c(-Inf, -0.25)
 )
 
 degs <- deg_args %>%
   pmap(~ {
     args <- list(...)
-
+    
     if      (all(args$log_fc > 0)) typ <- "-up"
     else if (all(args$log_fc < 0)) typ <- "-down"
     else                           typ <- ""
@@ -1583,11 +1582,12 @@ degs <- deg_args %>%
     d <- eval(sym(args$so_in)) %>%
       get_degs(
         log_fc     = args$log_fc,
-        file       = file,
+        pval       = 0.05,
         ident_1    = args$ident_1,
         ident_2    = args$ident_2,
         treat_clmn = args$treat_clmn,
-        type_clmn  = args$type_clmn
+        type_clmn  = args$type_clmn,
+        file       = file
       ) %>%
       list()
     
@@ -1609,7 +1609,7 @@ go_sim_data <- godata(
 )
 
 # Get GO terms
-# only use top 200 DEGs
+# only use top 200 DEGs sorted by max p-value
 go_degs <- degs[grepl("^so_(8|merge)-up_lectype$", names(degs))] %>%
   map(~ {
     .x %>%
@@ -1627,15 +1627,13 @@ go <- go_degs %>%
     so_in <- str_remove(.y, "-.+$")
     prfx  <- str_remove(so_in, "^so_")
     file  <- str_c(prfx, "_", clmn, "_chikv", typ, "_go")
-    file  <- here(params$table_dir, file)
+    file  <- here(params$table_dir, file)  # file extension gets added later
     
     .x %>%
       get_go(
         so_in     = eval(sym(so_in)),
         file      = file,
         type_clmn = "lec_type"
-        
-        # max_term_size = 300
       )
   })
 ```
@@ -1648,24 +1646,26 @@ exclude_cell_types <- c(
   "Erythrocytes", "unassigned", "unassigned-LEC"
 )
 
-# Only use terms with >= 3 overlapping genes for 8 hpi and 10 for 24 hpi
-so_8_re <- "^(so_8-|so_[0-9]+_chikv)"
+# Only use terms with >= 3 overlapping genes for 8 hpi (and CHIKV-high/low)
+# and >= 10 overlapping genes for 24 hpi
+so_8_re <- "^so_(8|[0-9]+_chikv)-"
 
 clusters <- go %>%
   imap(~ {
     ovlp <- ifelse(grepl(so_8_re, .y), 3, 10)
-    k    <- ifelse(grepl(so_8_re, .y), 5, 5)
+    # k    <- ifelse(grepl(so_8_re, .y), 5, 5)
     
     get_clusters(
       .x,
-      k = k,
+      k         = 5,
       n_overlap = ovlp,
       n_shared  = 1
     )
   }) %>%
   discard(is.null)
 
-# Calculate similarity between 8hpi and 24hpi terms
+# Calculate similarity between from each 8hpi and 24hpi GO cluster
+# want to determine which GO clusters are most similar to each other
 clusters_merged <- clusters$`so_merge-up`$clusters %>%
   mutate(cluster = str_c("24hpi-", cluster))
 
@@ -1684,8 +1684,8 @@ comps <- names(clusters_merged) %>%
   as.list()
 
 cluster_sim <- map2_dfr(comps$Var1, comps$Var2, ~ {
-  sim <- mgoSim(
-    GO1 = clusters_merged[[.x]],
+  sim <- mgoSim(                  # this calculates semantic similarity for
+    GO1 = clusters_merged[[.x]],  # lists of GO terms
     GO2 = clusters_merged[[.y]],
     semData = go_sim_data
   )
@@ -1693,7 +1693,7 @@ cluster_sim <- map2_dfr(comps$Var1, comps$Var2, ~ {
   tibble(var1 = .x, var2 = .y, sim = sim)
 })
 
-# Create heatmap
+# Create heatmap showing GO cluster similarity
 sim_heatmap <- cluster_sim %>%
   mutate(
     var1 = fct_relevel(var1, cluster_lvls),
