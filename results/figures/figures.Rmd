@@ -14,6 +14,7 @@ params:
   
   src_dir:      "src"
   so_dir:       "~/Dropbox/Ryan/Projects/morrison-lnsc/results/sobjs"
+  table_dir:    "results/tables"
   so_24:        "~/Dropbox/Ryan/Projects/morrison-scRNA-seq/results/2021-01-08/sobjs/so.rds"
   tm:           "8hpi"                    # Timepoint label
   unenr_dir:    "results/2021-04-16"      # Directory for unenriched data
@@ -22,8 +23,9 @@ params:
   gene_max:     8000                      # Max number of detected genes per cell
   mito_max:     20                        # Max percentage mito reads per cells
   type_res:     10                        # Clustering resolution for annotating cell types
-  lec_res:      10                        # Clustering resolution for annotating LECs
   frc_res:      3                         # Clustering resolution for annotating fibroblasts
+  lec_res:      11.5                      # Clustering resolution for annotating LECs
+  lec_n_genes:  1500                      # Number of variable genes for annotating LECs
 editor_options: 
   chunk_output_type: console
 ---
@@ -189,22 +191,29 @@ n_lab <- set_names(frac_dat$n_lab, frac_dat$lec_type)
 # Perform hypergeometric test
 frac_dat <- frac_dat %>%
   group_by(lec_type) %>%
-  mutate(p_val = .calc_fisher(type_n, type_tot, n, tot - n)) %>%
+  mutate(p_val = .calc_fisher(
+    x = type_n,
+    k = type_tot,
+    m = n,
+    n = tot - n
+  )) %>%
   ungroup() %>%
-  arrange(p_val) %>%
   mutate(p_adj = p.adjust(p_val, method = "bonferroni")) %>%
   rowwise() %>%
   mutate(p_lab = .format_pvalue(p_adj)) %>%
-  ungroup()
+  ungroup() %>%
+  arrange(p_adj)
 
-# Create bargraphs
-# Only include cell types with >40 total cells, >3 CHIKV+ cells
+# Filter cells for plotting
+# only plot cell types with >40 total cells, >3 CHIKV+ cells
+# use frac_lvls to filter cell types for fig 1C
 frac_dat <- frac_dat %>%
   filter(type_tot > 40, type_n > 3)
 
 frac_lvls <- levels(frac_dat$lec_type)
 frac_lvls <- frac_lvls[frac_lvls %in% frac_dat$lec_type]
 
+# Create bargraphs
 frac_8 <- frac_dat %>%
   ggplot(aes(lec_type, type_frac, fill = lec_type, color = lec_type)) +
   geom_col(
@@ -236,23 +245,22 @@ frac_8 <- frac_dat %>%
 # # To plot density for hypergeometric distribution for fLECs
 # dhyper(
 #   x = 1:23,  # number of white balls drawn
+#   k = 74,    # number of balls drawn
 #   m = 267,   # number of white balls in urn
-#   n = 3286,  # number of black balls in urn
-#   k = 74     # number of balls drawn
+#   n = 3286   # number of black balls in urn
 # )
-#
-# # As a test, calculate p-value for identitified GO term
-# 84/191	632/15076	6.588999771563824e-65
 # 
-# data.frame(
-#   up    = c(84, 191 - 84),
-#   other = c(632, 15076 - 632),
-#   row.names = c("in_term", "out_term")
-# ) %>%
-#   t() %>%
-#   # chisq.test() %>%
-#   fisher.test(alternative = "t") %>%
-#   tidy()
+# # As a test, calculate p-value for identitified GO term
+# # file  ID  GeneRatio BgRatio pvalue  p.adjust
+# # merge_lectype_chikv-up  GO:0045087  84/191  632/15076 6.588999771563824e-65 1.7875956380252655e-61
+# 
+# .calc_fisher(
+#   x = 84,
+#   k = 191,
+#   m = 632,
+#   n = 15076 - 632,
+#   alt = "greater"
+# )
 ```
 
 ```{r "CHIKV score boxes", fig.width = 10, fig.height = 5}
@@ -515,7 +523,7 @@ cnt_dat %>%
 # Format data
 figS2_dat <- so_24@meta.data %>%
   as_tibble(rownames = "cell_id") %>%
-  arrange(CHIKV_sgRNA_fc)
+  arrange(sgRNA_ratio_pseudo)
 
 # Coordinates for circle
 circ_coords <- figS2_dat %>%
@@ -554,7 +562,7 @@ type_umap <- figS2_dat %>%
   
 # sgRNA ratio UMAP
 sgRNA_umap <- figS2_dat %>%
-  ggplot(aes(UMAP_1, UMAP_2, fill = CHIKV_sgRNA_fc)) +
+  ggplot(aes(UMAP_1, UMAP_2, fill = sgRNA_ratio_pseudo)) +
   geom_point_trace(
     color = "grey",
     trace_position = "bottom",
@@ -589,7 +597,7 @@ sgRNA_umap <- figS2_dat %>%
 
 ```{r "scatter plots", fig.width = 10, fig.height = 7}
 # Only plot CHIKV-high cells
-# Do not include any CHIKV-low cells since they have been filtered
+# do not include any CHIKV-low cells since they have been filtered
 # stringently based on QC and CHIKV-high cells have not. Including CHIKV-low
 # cells would influence correlations
 
@@ -599,7 +607,7 @@ y_vars <- c(
   "% mitochondrial\nreads"   = "pct_mito"
 )
 
-x_var <- c("CHIKV sgRNA ratio" = "CHIKV_sgRNA_fc")
+x_var <- c("CHIKV sgRNA ratio" = "sgRNA_ratio_pseudo")
 typs  <- c("Marco_LEC", "unassigned-LEC")
 
 # Format scatter plot data
@@ -691,8 +699,8 @@ frac_dat <- figS2_dat %>%
   ) %>%
   group_by(lec_type) %>%
   mutate(
-    type_tot  = sum(rep_tot),
     type_n    = sum(rep_n),
+    type_tot  = sum(rep_tot),
     type_frac = type_n / type_tot,
     n_lab     = label_comma()(type_tot),
     n_lab     = str_c(lec_type, "\nn = ", type_n, "/", n_lab),
@@ -700,8 +708,8 @@ frac_dat <- figS2_dat %>%
   ) %>%
   ungroup() %>%
   mutate(
-    tot      = sum(rep_tot),
     n        = sum(rep_n),
+    tot      = sum(rep_tot),
     frac     = n / tot,
     lec_type = fct_reorder(lec_type, type_frac, max, .desc = TRUE)
   )
@@ -711,13 +719,18 @@ p_dat <- frac_dat %>%
   group_by(lec_type, type_n, type_tot, tot, n, n_lab) %>%
   summarize(rep_frac = max(rep_frac), .groups = "drop") %>%
   group_by(lec_type) %>%
-  mutate(p_val = .calc_fisher(type_n, type_tot, n, tot - n)) %>%
+  mutate(p_val = .calc_fisher(
+    x = type_n,
+    k = type_tot,
+    m = n,
+    n = tot - n
+  )) %>%
   ungroup() %>%
-  arrange(p_val) %>%
   mutate(p_adj = p.adjust(p_val, method = "bonferroni")) %>%
   rowwise() %>%
   mutate(p_lab = .format_pvalue(p_adj)) %>%
-  ungroup()
+  ungroup() %>%
+  arrange(p_adj)
 
 # Create bargraphs
 # Only include cell types with >40 total cells, >3 CHIKV-high cells
@@ -757,19 +770,13 @@ frac_24 <- frac_dat %>%
 
 ```{r "sgRNA ratio violins"}
 # Format sgRNA ratio data
-# Only include cell types with >40 cells
+# Only include cell types with >40 total cells after filtering
 # For figure S2B a pseudo count of 1 was added to both sgRNA and 5' counts to
 # eliminate division by zero
 # For violin plots do not need to add pseudo count since we are filtering to
 # remove cells with 0 counts
 bx_dat <- figS2_dat %>%
-  filter(
-    CHIKV_sgRNA > 0,
-    CHIKV_5 > 0
-  ) %>%
-  mutate(
-    CHIKV_sgRNA_fc_raw = CHIKV_sgRNA / CHIKV_5
-  ) %>%
+  filter(CHIKV_sgRNA > 0, CHIKV_5 > 0) %>%
   group_by(lec_type) %>%
   filter(n() > 40) %>%
   ungroup()
@@ -778,9 +785,9 @@ bx_dat <- figS2_dat %>%
 bx_lvls <- bx_dat %>%
   group_by(lec_type) %>%
   summarize(
-    med = median(CHIKV_sgRNA_fc_raw),
-    q3  = quantile(CHIKV_sgRNA_fc_raw, 0.75),
-    max = max(CHIKV_sgRNA_fc_raw),
+    med = median(sgRNA_ratio),
+    q3  = quantile(sgRNA_ratio, 0.75),
+    max = max(sgRNA_ratio),
     .groups = "drop"
   ) %>%
   arrange(desc(med), desc(q3), desc(max)) %>%
@@ -788,7 +795,7 @@ bx_lvls <- bx_dat %>%
 
 sgRNA_boxes <- bx_dat %>%
   plot_violin(
-    "CHIKV_sgRNA_fc_raw",
+    "sgRNA_ratio",
     cluster_col = "lec_type",
     plot_colors = lec_type_cols,
     plot_lvls   = bx_lvls,
@@ -812,11 +819,11 @@ sgRNA_boxes <- bx_dat %>%
 # write table with all p-values
 bx_p_vals <- bx_dat %>%
   calc_p_vals(
-    data_column = "CHIKV_sgRNA_fc_raw",
+    data_column = "sgRNA_ratio",
     type_column = "lec_type"
   )
 
-p_file <- here("results/tables/figS2_sgRNA_pval.tsv")
+p_file <- here(params$table_dir, "figS2_sgRNA_pval.tsv")
 
 bx_p_vals %>%
   write_tsv(p_file)
@@ -906,64 +913,23 @@ C.  The correlation between annotated endothelial subsets and reference data is 
 D.  The expression of select marker genes is shown for the 8 hpi and 24 hpi timepoints.
 
 ```{r "fig S3 cell type UMAPs", fig.width = 12, fig.height = 6}
-create_type_umaps <- function(so_in, data_col, clrs = type_cols, ttl = NULL, ...) {
-  res <- so_in %>%
-    mutate_meta(~ {
-      .x %>%
-        group_by(tm, treatment) %>%
-        mutate(
-          n_lab = label_comma()(n()),
-          n_lab = str_c("n = ", n_lab)
-        ) %>%
-        ungroup() %>%
-        mutate(
-          tm = fct_relevel(tm, c("8hpi", "24hpi")),
-          treatment = fct_relevel(treatment, treats)
-        )
-    }) %>%
-    plot_scatter(
-      data_col,
-      x = "hUMAP_1",
-      y = "hUMAP_2",
-      n_label     = "legend",
-      plot_colors = clrs,
-      ...
-    ) + 
-    geom_text(
-      aes(Inf, Inf, label = n_lab),
-      hjust = 1.1, vjust = 1.2, color = "black",
-      check_overlap = TRUE
-    ) +
-    facet_grid(tm ~ treatment) +
-    ggtitle(ttl) +
-    theme(
-      aspect.ratio = 0.8,
-      axis.title   = element_blank(),
-      axis.text    = element_blank(),
-      axis.ticks   = element_blank(),
-      legend.title = element_blank(),
-      plot.title   = element_text(face = "plain", hjust = 0.5),
-      legend.position = "bottom"
-    )
-  
-  res
-}
-
 # Load merged objects containing all cells
 all_u <- so_merge_df %>%
   create_type_umaps(
     "cell_type",
-    clrs = type_cols,
-    ttl  = "Cell types",
-    size = 0.001
+    facet_plot = c("tm", "treatment"),
+    clrs       = type_cols,
+    ttl        = "Cell types",
+    size       = 0.001
   )
 
 lec_u <- so_lec %>%
   create_type_umaps(
     "lec_subtype",
-    clrs = lec_type_cols,
-    ttl  = "Endothelial cell types",
-    size = 0.001
+    facet_plot = c("tm", "treatment"),
+    clrs       = lec_type_cols,
+    ttl        = "Endothelial cell types",
+    size       = 0.001
   )
 
 # Create final figure
@@ -978,9 +944,7 @@ type_fig <- plot_grid(
 ```
 
 ```{r "fig S3 cell type heatmaps", fig.width = 8, fig.height = 5}
-# Alternate version of cell type heatmaps
-# calculate correlations using combined data for all samples
-
+# Calculate correlations using combined data for all samples
 # Format heatmap data
 h_dat <- so_lec %>%
   mutate_meta(
@@ -1098,8 +1062,6 @@ type_heats <- heat_args %>%
 ```
 
 ```{r "fig S3 type examples extended", fig.width = 10, fig.height = 6.5}
-tms <- c("8hpi", "24hpi")
-
 gns <- c(
   "Lyve1", "Marco",    # Marco LECs
   "Madcam1", "Vcam1",  # fLECs
@@ -1203,6 +1165,7 @@ plot_grid(
 This is an alternate version of Figure S3 that includes plots showing Mxra8 expression for CHIKV+ FRCs and BECs for the 8 hpi timepoint.
 
 ```{r "fig S3 v2", fig.width = 12, fig.height = 20}
+# Add Mxra8 plots to figure
 d <- mxra8_bxs[c("FRC", "BEC")] %>%
   map(~ {
     .x +
@@ -1217,8 +1180,6 @@ d <- mxra8_bxs[c("FRC", "BEC")] %>%
 
 heats_fig_v2 <- plot_grid(
   type_heats_v2, d,
-  # align      = "h",
-  # axis       = "b",
   labels     = c("C", "D"),
   label_size = ttl_pt2 * 1.5,
   nrow       = 1
@@ -1550,8 +1511,9 @@ feats %>%
 ## Figure 5
 
 ```{r "DEGs"}
-# Create object to compare CHIKV 24 hpi with 8 hpi
+# Create merged object to compare CHIKV 24 hpi with 8 hpi
 # only use top two biological replicates with the most cells
+# set new replicate names
 top_reps <- as.character(so_24$rep) %>%
   table() %>%
   sort() %>%
@@ -1616,7 +1578,7 @@ degs <- deg_args %>%
     prfx  <- str_remove(args$so_in, "^so_")
     label <- str_remove_all(args$type_clmn, "_")
     file  <- str_c(prfx, "_", label, "_chikv", typ, "_markers.tsv")
-    file  <- here("results/tables", file)
+    file  <- here(params$table_dir, file)
     
     d <- eval(sym(args$so_in)) %>%
       get_degs(
@@ -1665,13 +1627,15 @@ go <- go_degs %>%
     so_in <- str_remove(.y, "-.+$")
     prfx  <- str_remove(so_in, "^so_")
     file  <- str_c(prfx, "_", clmn, "_chikv", typ, "_go")
-    file  <- here("results/tables", file)
+    file  <- here(params$table_dir, file)
     
     .x %>%
       get_go(
         so_in     = eval(sym(so_in)),
         file      = file,
         type_clmn = "lec_type"
+        
+        # max_term_size = 300
       )
   })
 ```
@@ -1692,7 +1656,12 @@ clusters <- go %>%
     ovlp <- ifelse(grepl(so_8_re, .y), 3, 10)
     k    <- ifelse(grepl(so_8_re, .y), 5, 5)
     
-    get_clusters(.x, k = k, n_overlap = ovlp, n_shared = 1)
+    get_clusters(
+      .x,
+      k = k,
+      n_overlap = ovlp,
+      n_shared  = 1
+    )
   }) %>%
   discard(is.null)
 
@@ -1769,29 +1738,80 @@ go_heat <- clusters %>%
     
     .x$clusters %>%
       create_go_heatmap(
-        go_in     = go_in,
-        n_overlap = ovlp,
-        # n_genes   = n_gns,
-        clusters  = clsts,
-        clrs      = clrs,
+        go_in          = go_in,
+        n_overlap      = ovlp,
+        # n_genes        = n_gns,
+        clusters       = clsts,
+        clrs           = clrs,
         cluster_labels = ttls,
         exclude_cell_types = exclude_cell_types
       )
   })
 
+
+
+# # Calculate similarity between all terms
+# cluster_terms <- clusters %>%
+#   imap(~ {
+#     res <- .x$clusters %>%
+#       filter(n > 1) %>%
+#       split(.$cluster) %>%
+#       map(dplyr::select, Description, ID)
+# 
+#     names(res) <- str_c(.y, "-", names(res))
+# 
+#     res
+#   }) %>%
+#   flatten()
+# 
+# term_sim <- cluster_terms %>%
+#   imap_dfr(~ {
+#     comp  <- .y
+#     terms <- .x$ID
+# 
+#     .x %>%
+#       mutate(
+#         sim = map(ID, ~ {
+#           id <- .x
+# 
+#           terms %>%
+#             map_dfr(~ {
+#               tibble(
+#                 comp  = comp,
+#                 term1 = id,
+#                 term2 = .x,
+#                 sim   = goSim(id, .x, go_sim_data)
+#               )
+#             })
+#         })
+#       ) %>%
+#       unnest(sim) %>%
+#       group_by(comp, Description, ID) %>%
+#       summarize(
+#         n_terms  = n(),
+#         mean_sim = mean(sim),
+#         med_sim  = median(sim),
+#         .groups  = "drop"
+#       ) %>%
+#       arrange(desc(med_sim))
+#   })
+# 
 # # Calculate frequency of words for each GO cluster
-# clusters %>%
-#   map_dfr(~ {
+# word_freq <- clusters %>%
+#   imap_dfr(~ {
+#     comp <- .y
+#     
 #     .x$clusters %>%
 #       split(.$cluster) %>%
-#       map_dfr(~ {
+#       imap_dfr(~ {
 #         .x %>%
-#           filter(cluster == 1) %>%
 #           pull(ID) %>%
-#           simplifyEnrichment::keyword_enrichment_from_GO()
+#           simplifyEnrichment::keyword_enrichment_from_GO() %>%
+#           mutate(comparison = comp, cluster = .y)
 #       })
 #   })
 # 
+# # Identify similar clusters between comparisons
 # clst_matches <- cluster_sim %>%
 #   filter(var1 != var2) %>%
 #   group_by(var1) %>%
@@ -1924,78 +1944,6 @@ other_examples <- plot_grid(
 ```
 
 ```{r "fig 5 UMAPs", fig.width = 12, fig.height = 6}
-create_type_umaps <- function(so_in, data_col, x = "hUMAP_1", y = "hUMAP_2",
-                              clrs = type_cols, ttl = NULL, n_lab = TRUE,
-                              facet_plot = c("tm", "treatment"), ...) {
-  res <- so_in %>%
-    mutate_meta(~ {
-      dat <- .x
-      
-      if (!is.null(facet_plot)) {
-        dat <- dat %>%
-          group_by(!!!syms(facet_plot))
-      }
-      
-      dat %>%
-        mutate(
-          n_lab = label_comma()(n()),
-          n_lab = str_c("n = ", n_lab)
-        ) %>%
-        ungroup() %>%
-        mutate(
-          tm = fct_relevel(tm, c("8hpi", "24hpi")),
-          treatment = fct_relevel(treatment, treats)
-        )
-    })
-  
-  args <- list(
-    input = res,
-    data_col = data_col,
-    x = x,
-    y = y,
-    plot_colors = clrs,
-    ...
-  )
-  
-  args$n_label <- args$n_label %||% "legend"
-  
-  res <- lift_dl(plot_scatter)(args) +
-    ggtitle(ttl) +
-    theme(
-      aspect.ratio      = 0.9,
-      plot.margin       = margin(15, 15, 30, 15),
-      axis.title        = element_blank(),
-      axis.text         = element_blank(),
-      axis.ticks        = element_blank(),
-      legend.title      = element_blank(),
-      panel.background  = element_blank(),
-      plot.title        = element_text(face = "plain", hjust = 0.5),
-      legend.position   = "right",
-      legend.key.height = unit(30, "pt")
-    )
-  
-  if (n_lab) {
-    res <- res +
-      geom_text(
-        aes(Inf, Inf, label = n_lab),
-        hjust = 1.1, vjust = 1.2, color = "black",
-        check_overlap = TRUE
-      )
-  }
-  
-  if (!is.null(facet_plot)) {
-    frm <- case_with(
-      length(facet_plot) == 1 ~ str_c("~ ", facet_plot),
-      length(facet_plot) > 1  ~ str_c(facet_plot[1:2], collapse = " ~ ")
-    )
-    
-    res <- res +
-      facet_grid(as.formula(frm))
-  }
-  
-  res
-}
-
 # Format UMAP data
 u_lvls <- unique(so_merge_df$tm_treat)
 
@@ -2008,39 +1956,39 @@ u_clrs <- set_names(
 treat_u <- so_merge_df %>%
   create_type_umaps(
     "tm_treat",
-    x = "UMAP_1",
-    y = "UMAP_2",
-    size = 0.05,
-    plot_lvls = u_lvls,
+    x          = "UMAP_1",
+    y          = "UMAP_2",
+    size       = 0.05,
+    plot_lvls  = u_lvls,
     clrs       = u_clrs,
     facet_plot = NULL,
-    n_lab = TRUE
+    n_lab      = TRUE
   )
 
 # UMAP showing cell types
 typ_u <- so_merge_df %>%
   create_type_umaps(
     "cell_type",
-    x = "UMAP_1",
-    y = "UMAP_2",
-    clrs = type_cols,
-    size = 0.05,
+    x          = "UMAP_1",
+    y          = "UMAP_2",
+    clrs       = type_cols,
+    size       = 0.05,
     facet_plot = NULL,
-    n_lab = TRUE
+    n_lab      = TRUE
   )
 
 # Create final figure
 u_fig <- plot_grid(
   treat_u, typ_u,
-  align = "h",
-  axis  = "tb",
-  nrow  = 1,
-  labels = c("A", "B"),
+  align      = "h",
+  axis       = "tb",
+  nrow       = 1,
+  labels     = c("A", "B"),
   label_size = ttl_pt2 * 1.5
 )
 ```
 
-Differentially expressed genes were identified for each cell type for mock vs 8 hpi and 8 hpi vs 24 hpi. Genes were considered upregulated if the log2 fold change was >0.15 for 8 hpi and >0.25 for 24 hpi for all replicates and the largest p-value for all replicates was <0.05.
+Differentially expressed genes were identified for each cell type for mock (from 8 hpi experiment) vs 8 hpi and 8 hpi vs 24 hpi. Since the 8 hpi timepoint only has two biological replicates, the top two replicates from the 24 hpi timepoint with the most cells were used for the 8 vs 24 hpi comparison. Genes were considered upregulated if the log2 fold change was >0.15 for 8 hpi and >0.25 for 24 hpi for all replicates and the largest p-value for all replicates was <0.05.
 
 ```{r "DEG parameters"}
 as.data.frame(deg_args)
@@ -2052,10 +2000,11 @@ Gene ontology terms (biological process) were identified for the top 200 upregul
 
 A.  UMAP projection shows cells from the 8 hpi and 24 hpi timepoints, cells are colored by sample.
 B.  UMAP projection shows cells from the 8 hpi and 24 hpi timepoints, cells are colored by cell type.
-C.  The 8 hpi timeopoint shows upregulation of genes associated with an innate immune response. Enrichment scores are shown for each cell type for the primary gene ontology module identified for genes upregulated at the 8 hpi timepoint. Enrichment score is the fraction of upregulated genes overlapping the term divided by the fraction of background genes overlapping the term. GO terms that are significantly enriched are marked by the diamond.
+C.  The 8 hpi timeopoint shows upregulation of genes associated with an innate immune response. Enrichment scores are shown for each cell type for the primary gene ontology module identified for genes upregulated at the 8 hpi timepoint. Enrichment score is the fraction of upregulated genes overlapping the term divided by the fraction of background genes overlapping the term. GO terms that are significantly enriched are marked by a diamond.
 D.  A selection of top upregulated genes identified for the terms shown in A are plotted. Points show the median expression for the mock (m), 8 hpi (8h), and 24 hpi (24h) samples, grey bars show the interquartile range. A solid line indicates that the gene is significantly upregulated between the samples.
 E.  Enrichment scores are shown for the primary GO modules identified for the 24 hpi timepoint, as described in C.
-F.  Top upregulated genes identified for the terms shown in E are plotted as described in D.
+F.  A selection of top upregulated genes identified for the terms shown in E are plotted as described in D.
+G.  Expression of homeostatic cytokines is shown for BECs, FRCs (combination of FRCs and PvCs shown in A-F), and LECs as described in D. A solid line indicates that the gene is significantly up- or down-regulated between the samples.  
 
 ```{r "GO figures", fig.width = 13, fig.height = 18}
 top <- plot_grid(
@@ -2094,7 +2043,7 @@ A.  Dendrogram showing gene ontology modules. GO terms were identified for each 
 B.  Enrichment scores are shown for each GO module identified for each timepoint, as described in Fig 5.
 C.  Top upregulated genes are shown for each GO module as described in Fig 5. Genes were sorted to 
 
-```{r "EXPANDED FIGURES", fig.width = 16, fig.height = 19, results = "asis"}
+```{r "expanded GO figures", fig.width = 16, fig.height = 19, results = "asis"}
 # Split GO objects by cell type
 go_type <- go %>%
   imap(~ {
@@ -2315,7 +2264,7 @@ sim_heatmap
 
 
 
-```{r "GO CLUSTER GENE OVERLAP"}
+```{r "GO CLUSTER GENE OVERLAP", eval = FALSE}
 # Pull upregulated genes for each GO cluster for each timepoint
 clst_terms <- clusters %>%
   map(~ {

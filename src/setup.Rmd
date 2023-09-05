@@ -493,6 +493,78 @@ create_example_gene_fig2 <- function(df_in, gns, x_clmn, al_clmn,
   res
 }
 
+create_type_umaps <- function(so_in, data_col, x = "hUMAP_1", y = "hUMAP_2",
+                              clrs = type_cols, ttl = NULL, n_lab = TRUE,
+                              facet_plot = c("tm", "treatment"), ...) {
+  res <- so_in %>%
+    mutate_meta(~ {
+      dat <- .x
+      
+      if (!is.null(facet_plot)) {
+        dat <- dat %>%
+          group_by(!!!syms(facet_plot))
+      }
+      
+      dat %>%
+        mutate(
+          n_lab = label_comma()(n()),
+          n_lab = str_c("n = ", n_lab)
+        ) %>%
+        ungroup() %>%
+        mutate(
+          tm = fct_relevel(tm, tms),
+          treatment = fct_relevel(treatment, treats)
+        )
+    })
+  
+  args <- list(
+    input       = res,
+    data_col    = data_col,
+    x           = x,
+    y           = y,
+    plot_colors = clrs,
+    ...
+  )
+  
+  args$n_label <- args$n_label %||% "legend"
+  
+  res <- lift_dl(plot_scatter)(args) +
+    ggtitle(ttl) +
+    theme(
+      aspect.ratio      = 0.9,
+      plot.margin       = margin(15, 15, 30, 15),
+      axis.title        = element_blank(),
+      axis.text         = element_blank(),
+      axis.ticks        = element_blank(),
+      legend.title      = element_blank(),
+      panel.background  = element_blank(),
+      plot.title        = element_text(face = "plain", hjust = 0.5),
+      legend.position   = "right",
+      legend.key.height = unit(30, "pt")
+    )
+  
+  if (n_lab) {
+    res <- res +
+      geom_text(
+        aes(Inf, Inf, label = n_lab),
+        hjust = 1.1, vjust = 1.2, color = "black",
+        check_overlap = TRUE
+      )
+  }
+  
+  if (!is.null(facet_plot)) {
+    frm <- case_when(  # returns vector of same length as input
+      length(facet_plot) == 1 ~ str_c("~ ", facet_plot),
+      length(facet_plot) > 1  ~ str_c(facet_plot[1:2], collapse = " ~ ")
+    )
+    
+    res <- res +
+      facet_grid(as.formula(frm[1]))
+  }
+  
+  res
+}
+
 #' Fill the upper triangular matrix completely
 #' 
 #' FROM ENRICHPLOT
@@ -740,9 +812,12 @@ get_go <- function(gns, so_in, type_clmn = "subtype", max_term_size = 750,
 #' for it to be included for clustering
 #' @param sim_data Similarity data to use for clustering GO terms, generated
 #' using [clusterProfiler::godata()]
+#' @param min_term_size Minimum number of genes for term to be included
+#' @param max_term_size Maximum number of genes for term to be included
 #' @param exclude_cell_types Cell types to exclude from GO clustering
 get_clusters <- function(go_in, k = 3, pval = 0.05, qval = 0.2, n_overlap = 3,
                          n_shared = 2, sim_data = go_sim_data,
+                         min_term_size = -Inf, max_term_size = Inf,
                          exclude_cell_types = NULL) {
   
   # Filter GO terms
@@ -763,6 +838,10 @@ get_clusters <- function(go_in, k = 3, pval = 0.05, qval = 0.2, n_overlap = 3,
       GeneRatio  = n_ovlp / tot_genes,
       BgRatio    = n_bg_ovlp / tot_bg_genes,
       enrichment = GeneRatio / BgRatio
+    ) %>%
+    filter(
+      n_bg_ovlp >= min_term_size,
+      n_bg_ovlp <= max_term_size
     ) %>%
     
     group_by(Description, ID) %>%
@@ -1554,10 +1633,16 @@ rm(so_enr)
 ```
 
 ```{r "integrate samples", eval = create_obj}
-# Adjust 8 and 24 hpi objects
+# Adjust 8 and 24 hpi objects for integration
+# calculate sgRNA ratio with and without pseudo count
 so_24 <- params$so_24 %>%
   read_rds() %>%
-  mutate_meta(mutate, tm = "24hpi")
+  mutate_meta(
+    mutate,
+    tm = "24hpi",
+    sgRNA_ratio        = CHIKV_sgRNA / CHIKV_5,
+    sgRNA_ratio_pseudo = (CHIKV_sgRNA + 1) / (CHIKV_5 + 1)
+  )
 
 so_8 <- so
 
@@ -1972,7 +2057,7 @@ so_lec <- so_lec %>%
   clustify(
     ref_mat     = ref_lec,
     cluster_col = lec_clst,
-    n_genes     = 1500,
+    n_genes     = params$lec_n_genes,
     threshold   = 0.55
    )
 
@@ -2024,7 +2109,7 @@ so_merge <- so_merge %>%
   ) %>%
   AddMetaData(FetchData(., c("hUMAP_1", "hUMAP_2")))
 
-# Add subsets to 8 and 24 hpi objects
+# Add meta.data labels to 8 and 24 hpi objects
 clmns <- c(
   "cell_type", "cell_type_2", "tm_treat",
   "lec_type",  "lec_subtype",
@@ -2053,9 +2138,6 @@ so_8     <- qread(file.path(params$so_dir, "so_8.qs"))
 so_24    <- qread(file.path(params$so_dir, "so_24.qs"))
 
 so_merge_df <- read_tsv(file.path(params$so_dir, "so_merge.tsv.gz"))
-
-so_merge_df <- so_merge_df %>%
-  mutate()
 ```
 
 ```{r "theme"}
