@@ -649,7 +649,7 @@ get_degs <- function(so_in, ident_1 = "CHIKV", ident_2 = "mock",
   if (!is.null(file) && file.exists(file)) {
     cli::cli_alert("Loading file {.file {file}}")
     
-    return(read_tsv(file))
+    return(read_tsv(file, show_col_types = FALSE, progress = FALSE))
   }
   
   # Identify DEGs
@@ -697,11 +697,12 @@ get_degs <- function(so_in, ident_1 = "CHIKV", ident_2 = "mock",
 #' This will include results for all terms regardless of significance, need
 #' all terms for creating heatmaps
 #' 
-#' @param gns Named list of differentially expressed genes for each cell type,
+#' @param genes Named list of differentially expressed genes for each cell type,
 #' names should correspond to cell type labels found in type_clmn
-#' @param so_in Seurat object so use for determining background gene set
+#' @param so_in Seurat object so use for determining background gene set, if
+#' `NULL` all genes are used
 #' @param type_clmn Column in Seurat object containing cell types, these should
-#' match the cell types provided by gns
+#' match the cell types provided by genes
 #' @param max_term_size Maximum term size to include in results
 #' @param min_term_size Minimum term size to include in results
 #' @param db GO database to use, specify 'ALL' to use all three
@@ -716,7 +717,7 @@ get_degs <- function(so_in, ident_1 = "CHIKV", ident_2 = "mock",
 #' @param sim_data Similarity data to use for simplifying GO terms, generated
 #' using [clusterProfiler::godata()]
 #' @param file Path to output file for saving results
-get_go <- function(gns, so_in, type_clmn = "subtype", max_term_size = 750,
+get_go <- function(genes, so_in, type_clmn = "subtype", max_term_size = 750,
                    min_term_size = 10, db = "BP", simplify_terms = TRUE,
                    n_bkgd = Inf, exclude_genes = "^(Rp[sl]|mt-)",
                    org_db = org.Mm.eg.db, sim_data = go_sim_data, file = NULL) {
@@ -734,12 +735,12 @@ get_go <- function(gns, so_in, type_clmn = "subtype", max_term_size = 750,
   
   # Identify background gene set for each cell type
   # this includes all genes with >0 counts for any cell
-  bkgd <- gns %>%
+  bkgd <- genes %>%
     imap(~ {
       bkgd <- NULL
       
       # so_in is required to determine background gene list
-      # if gns is not named, all cells in so_in will be used
+      # if genes is not named, all cells in so_in will be used
       if (!is.null(so_in)) {
         if (is.character(.y)) bkgd <- subset(so_in, !!sym(type_clmn) == .y)
         else                  bkgd <- so_in
@@ -762,7 +763,7 @@ get_go <- function(gns, so_in, type_clmn = "subtype", max_term_size = 750,
   
   # Identify GO terms for each gene list
   # exclude specified genes
-  go <- gns[1] %>%
+  go <- genes %>%
     imap(~ {
       .x <- .x[!grepl(exclude_genes, .x)]
       
@@ -802,7 +803,7 @@ get_go <- function(gns, so_in, type_clmn = "subtype", max_term_size = 750,
         })
       
       g %>%
-        mutate(bkgdID = bkgd_gns[ID])
+        mutate(bgID = bkgd_gns[ID])
     })
   
   # Merge GO objects  
@@ -822,6 +823,16 @@ get_go <- function(gns, so_in, type_clmn = "subtype", max_term_size = 750,
     go <- go %>%
       clusterProfiler::simplify(semData = sim_data)
   }
+  
+  # Calculate enrichment scores
+  go <- go %>%
+    mutate(
+      n_ovlp       = as.numeric(str_extract(GeneRatio, "^[0-9]+")),
+      tot_genes    = as.numeric(str_extract(GeneRatio, "[0-9]+$")),
+      n_bg_ovlp    = as.numeric(str_extract(BgRatio,   "^[0-9]+")),
+      tot_bg_genes = as.numeric(str_extract(BgRatio,   "[0-9]+$")),
+      enrichment   = (n_ovlp / tot_genes) / (n_bg_ovlp / tot_bg_genes)
+    )
   
   # Save results
   if (!is.null(file)) {
@@ -850,10 +861,10 @@ get_go <- function(gns, so_in, type_clmn = "subtype", max_term_size = 750,
 #' @param min_term_size Minimum number of genes for term to be included
 #' @param max_term_size Maximum number of genes for term to be included
 #' @param exclude_cell_types Cell types to exclude from GO clustering
-get_clusters <- function(go_in, k = 3, pval = 0.05, qval = 0.2, n_overlap = 3,
-                         n_shared = 2, sim_data = go_sim_data,
-                         min_term_size = -Inf, max_term_size = Inf,
-                         exclude_cell_types = NULL) {
+get_go_clusters <- function(go_in, k = 3, pval = 0.05, qval = 0.2, n_overlap = 3,
+                            n_shared = 1, sim_data = go_sim_data,
+                            min_term_size = -Inf, max_term_size = Inf,
+                            exclude_cell_types = NULL) {
   
   # Identify significant GO terms
   go_in <- go_in %>%
@@ -869,21 +880,6 @@ get_clusters <- function(go_in, k = 3, pval = 0.05, qval = 0.2, n_overlap = 3,
   # sort by number of cell types that share the term
   # these are the terms that will be used for clustering
   top_terms <- go_in@compareClusterResult %>%
-    separate(
-      GeneRatio,
-      into = c("n_ovlp", "tot_genes"),   # split gene ratios 
-      sep = "/", convert = TRUE
-    ) %>%
-    separate(
-      BgRatio,
-      into = c("n_bg_ovlp", "tot_bg_genes"),
-      sep = "/", convert = TRUE
-    ) %>%
-    mutate(
-      GeneRatio  = n_ovlp / tot_genes,   # calculate enrichment scores
-      BgRatio    = n_bg_ovlp / tot_bg_genes,
-      enrichment = GeneRatio / BgRatio
-    ) %>%
     filter(                              # filter based on term size
       n_bg_ovlp >= min_term_size,
       n_bg_ovlp <= max_term_size
@@ -891,14 +887,14 @@ get_clusters <- function(go_in, k = 3, pval = 0.05, qval = 0.2, n_overlap = 3,
     
     group_by(Description, ID) %>%
     summarize(
-      n          = n_distinct(Cluster),  # number of cell types with term
-      enrichment = mean(enrichment),     # mean enrichment score
-      p.adjust   = mean(p.adjust),       # mean p-value across cell types
-      qvalue     = mean(qvalue),         # mean q-value across cell types
-      .groups    = "drop"          
+      n_cell_types = n_distinct(Cluster),  # number of cell types with term
+      enrichment   = mean(enrichment),     # mean enrichment score
+      p.adjust     = mean(p.adjust),       # mean p-value across cell types
+      qvalue       = mean(qvalue),         # mean q-value across cell types
+      .groups      = "drop"          
     ) %>%
-    arrange(desc(n), p.adjust) %>%
-    dplyr::filter(n >= n_shared)
+    arrange(desc(n_cell_types), p.adjust) %>%
+    dplyr::filter(n_cell_types >= n_shared)
 
   # Set number of clusters
   # must average > 2 terms per cluster
@@ -932,14 +928,14 @@ get_clusters <- function(go_in, k = 3, pval = 0.05, qval = 0.2, n_overlap = 3,
   res <- clsts %>%
     left_join(top_terms, by = "Description") %>%
   
-    arrange(cluster, desc(n), p.adjust) %>%
+    arrange(cluster, desc(n_cell_types), p.adjust) %>%
     group_by(cluster) %>%
     mutate(
       cluster_n_terms = n_distinct(Description),
       cluster_mean_p  = mean(p.adjust)
     ) %>%
     ungroup() %>%
-    arrange(cluster, desc(n), p.adjust)
+    arrange(cluster, desc(n_cell_types), p.adjust)
   
   res <- list(
     clusters = res,             # data.frame with cluster stats/assignments
@@ -976,39 +972,40 @@ get_clusters <- function(go_in, k = 3, pval = 0.05, qval = 0.2, n_overlap = 3,
 #' @param free_y Allow height of each heatmap to differ based on the number of
 #' rows
 #' @param cluster_labels Vector containing descriptive labels for each cluster
+#' @param exclude_cell_types Cell types to exclude from plot
 create_go_heatmap <- function(df_in, go_in, n_clusters = 2, n_terms = 5,
-                              pval = 0.05, qval = 0.2, n_overlap = 3, n_genes = 3,
+                              pval = 0.05, qval = 0.2, n_overlap = 3,
+                              n_genes = 3,
                               clrs = c("orange", "lightblue", "red"), n_col = 1,
                               clusters = NULL, include_overall_score = FALSE,
                               free_y = FALSE, cluster_labels = NULL,
                               exclude_cell_types = NULL) {
   
+  # Top GO clusters to show
+  # selected based on number of terms belonging to each cluster
+  top_clusters <- clusters %||%
+    df_in$cluster %>%
+    table() %>%
+    sort(decreasing = TRUE) %>%
+    head(n_clusters) %>%
+    names()
+  
   # Top GO terms to plot
   # df_in includes combined GO terms identified across all cell types
-  # sort to show shared terms at the top, sort by mean adjusted p-value for term
-  if (!is.null(clusters)) {
-    top_clusters <- clusters
-    
-  } else {
-    top_clusters <- df_in$cluster %>%
-      table() %>%
-      sort(decreasing = TRUE) %>%
-      head(n_clusters) %>%
-      names()
-  }
-  
+  # sorted based on number of cell types sharing term, then mean enrichment 
+  # arrange(cluster, desc(n_cell_types), p.adjust) %>%
+  # arrange(cluster, desc(shared), p.adjust) %>%
   n_seq <- seq_len(n_terms)
   
   terms <- df_in %>%
     dplyr::filter(cluster %in% top_clusters) %>%
-    mutate(shared = n > 1) %>%
-    arrange(cluster, desc(n), desc(enrichment)) %>%
-    # arrange(cluster, desc(n), p.adjust) %>%
-    # arrange(cluster, desc(shared), p.adjust) %>%
+    mutate(shared = n_cell_types > 1) %>%
+    arrange(cluster, desc(n_cell_types), desc(enrichment)) %>%
     group_by(cluster) %>%
     dplyr::slice(n_seq) %>%
     ungroup()
   
+  # Max number of plotted terms, used to set aspect ratio for plot
   n_terms <- terms %>%
     group_by(cluster) %>%
     summarize(n = n_distinct(Description), .groups = "drop") %>%
@@ -1016,24 +1013,17 @@ create_go_heatmap <- function(df_in, go_in, n_clusters = 2, n_terms = 5,
     max()
   
   # Data for heatmap
-  # filter cell types (Cluster) here
+  # filter cell types (Cluster column) here
   cluster_ids <- df_in %>%
     dplyr::select(Description, cluster)
   
   agg_lab <- "Overall Enrichment"
-  lvls    <- c(agg_lab, rev(terms$Description))
+  lvls    <- rev(terms$Description)
   
   dat <- go_in@compareClusterResult %>%
     as_tibble() %>%
     left_join(cluster_ids, by = "Description") %>%
-    filter(cluster %in% top_clusters) %>%
-    separate(GeneRatio, into = c("n_ovlp", "tot_genes"), sep = "/", convert = TRUE) %>%
-    separate(BgRatio, into = c("n_bg_ovlp", "tot_bg_genes"), sep = "/", convert = TRUE) %>%
-    mutate(
-      GeneRatio  = n_ovlp / tot_genes,
-      BgRatio    = n_bg_ovlp / tot_bg_genes,
-      enrichment = GeneRatio / BgRatio
-    )
+    filter(cluster %in% top_clusters)
   
   if (!is.null(exclude_cell_types)) {
     dat <- dat %>%
@@ -1041,7 +1031,8 @@ create_go_heatmap <- function(df_in, go_in, n_clusters = 2, n_terms = 5,
   }
   
   # Calculate aggregated fraction overlap
-  # only show cell types with >= 10 overlapping genes
+  # filter cell types based on total number of unique DEGs overlapping
+  # plotted terms
   agg_dat <- dat
   
   if (!include_overall_score) {
@@ -1052,23 +1043,23 @@ create_go_heatmap <- function(df_in, go_in, n_clusters = 2, n_terms = 5,
   agg_dat <- agg_dat %>%
     mutate(
       geneID = str_split(geneID, "/"),
-      bkgdID = str_split(bkgdID, "/")
+      bgID   = str_split(bgID, "/")
     ) %>%
     group_by(Cluster, cluster, tot_genes, tot_bg_genes) %>%
     summarize(
       tot_ovlp    = n_distinct(reduce(geneID, c)),
-      tot_bg_ovlp = n_distinct(reduce(bkgdID, c)),
+      tot_bg_ovlp = n_distinct(reduce(bgID, c)),
       .groups     = "drop"
     ) %>%
     mutate(
-      GeneRatio   = tot_ovlp / tot_genes,
+      GeneRatio   = tot_ovlp    / tot_genes,
       BgRatio     = tot_bg_ovlp / tot_bg_genes,
-      enrichment  = GeneRatio / BgRatio,
+      enrichment  = GeneRatio   / BgRatio,
       Description = agg_lab
     ) %>%
     filter(tot_genes >= n_genes)
   
-  # If not including overall score sort based on terms shown
+  # If not including overall score, sort based on terms shown
   typ_lvls <- agg_dat %>%
     arrange(desc(enrichment)) %>%
     mutate(Cluster = fct_inorder(as.character(Cluster))) %>%
@@ -1082,6 +1073,8 @@ create_go_heatmap <- function(df_in, go_in, n_clusters = 2, n_terms = 5,
     )
   
   if (include_overall_score) {
+    lvls <- c(agg_lab, lvls)
+    
     dat <- dat %>%
       bind_rows(agg_dat)
   }
@@ -1090,7 +1083,9 @@ create_go_heatmap <- function(df_in, go_in, n_clusters = 2, n_terms = 5,
     mutate(Description = fct_relevel(Description, lvls)) %>%
     arrange(Description) %>%
     mutate(
-      Description = str_trunc(as.character(Description), width = 70, side = "right"),
+      Description = str_trunc(
+        as.character(Description), width = 70, side = "right"
+      ),
       Description = str_wrap(Description, width = 40),
       Description = fct_inorder(Description),
       Cluster     = fct_relevel(Cluster, typ_lvls)
@@ -1209,14 +1204,80 @@ create_go_heatmap <- function(df_in, go_in, n_clusters = 2, n_terms = 5,
   res
 }
 
+#' Identify top genes to plot for GO clusters
+#' 
+#' This will return the top genes to plot based on the number of cell types
+#' differentially expressing the gene and the minimum p-value for the gene.
+#' 
+#' If a vector of gene names is provided, this will check that all the
+#' provided genes are differentially expressed and overlap a GO term, and
+#' return the GO cluster assignment for the gene (cluster with at least one term
+#' the gene overlaps).
+#' 
+#' @param go_in data.frame containing GO results (compareClusterResult)
+#' @param degs_in data.frame containing DEG results
+#' @param clust_in data.frame containing cluster assignments for each GO term
+#' @param genes Either the number of genes to plot or a vector of gene names
+#' to plot
+#' @export
+get_go_genes <- function(go_in, degs_in, clust_in, genes = 5) {
+  
+  # Format GO cluster data
+  # go_in has genes overlapping each term
+  # clust_in has cluster assignments for each term
+  # sort by number of cell types sharing the term (Cluster column)
+  gns <- go_in %>%
+    right_join(clust_in, by = "Description") %>%
+    mutate(geneID = str_split(geneID, "/")) %>%
+    unnest(geneID) %>%
+    group_by(geneID, cluster) %>%
+    summarize(n = n_distinct(Cluster), .groups = "drop") %>%
+    distinct(geneID, .keep_all = TRUE) %>%
+    arrange(cluster, desc(n))
+  
+  # Calculate gene expression stats
+  # sort by number of cell types sharing the term and smallest DEG p-value for
+  # the gene (summarizing p-values across cell types for the gene)
+  exp_dat <- degs_in %>%
+    filter(gene %in% gns$geneID) %>%
+    group_by(gene) %>%
+    summarize(pval = min(max_pval), .groups = "drop")
+  
+  gns <- gns %>%
+    left_join(exp_dat, by = c(geneID = "gene")) %>%
+    arrange(cluster, desc(n), pval)
+  
+  # Pull top genes
+  if (is.numeric(genes)) {
+    gns <- gns %>%
+      group_by(cluster) %>%
+      dplyr::slice(1:genes)
+    
+  } else {
+    gns <- gns %>%
+      filter(geneID %in% genes)
+    
+    if (any(!genes %in% gns$geneID)) {
+      cli_warn("Some genes are not present in GO and/or DEG data")
+    }
+  }
+  
+  gns <- set_names(
+    as.character(gns$cluster),
+    gns$geneID
+  )
+  
+  gns
+}
+
 #' Create line graphs plotting mean expression of upregulated genes
 #' 
-#' @param exp_data Named list of Seurat objects containing expression data to
-#' plot
-#' @param deg_data Named list of data.frames containing DEGs, this is used to
-#' determine which genes are upregulated for each cell type and timepoint, the
-#' names need to match the names provided for exp_data
-#' @param gns Named vector specifying genes to plot, the names should be the
+#' @param all_exp_data Named list of Seurat objects containing all expression
+#' data wanting to plot
+#' @param all_degs_data Named list of data.frames containing DEGs, this is used to
+#' determine which genes are upregulated for each cell type and timepoint. DEGs
+#' need to be provided for each Seurat object provided to all_exp_data
+#' @param genes Named vector specifying genes to plot, the names should be the
 #' gene symbol and the values should be the cluster ID. Genes can be colored
 #' based on cluster ID
 #' @param clrs Colors to use for each cluster
@@ -1228,26 +1289,27 @@ create_go_heatmap <- function(df_in, go_in, n_clusters = 2, n_terms = 5,
 #' each treatment group for a line to be shown for the timepoint/cell type
 #' @param only_show_upreg Only show cell types with at least one gene
 #' upregulated for any of the timepoints
-create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge),
-                              deg_data = list("8hpi" = degs$`so_8-up`,
-                                              "24hpi" = degs$`so_merge-up`),
-                              gns,
-                              clrs = c(`1` = "orange"), cell_types = 10,
-                              lvls = c("mock", "8hpi", "24hpi"), n_cells = 10,
-                              type_clmn = "lec_type", only_show_upreg = TRUE,
-                              exclude_cell_types = NULL) {
+#' @param exclude_cell_types Cell types to exclude from plot
+create_go_gene_plots <- function(all_exp_data = list("8hpi" = so_8, "24hpi" = so_merge),
+                                 all_degs_data = list("8hpi" = degs$`so_8-up`,
+                                                 "24hpi" = degs$`so_merge-up`),
+                                 genes,
+                                 clrs = c(`1` = "orange"), cell_types = 10,
+                                 lvls = c("mock", "8hpi", "24hpi"), n_cells = 10,
+                                 type_clmn = "lec_type", only_show_upreg = TRUE,
+                                 exclude_cell_types = NULL) {
   
   # Genes to plot
-  genes <- names(gns) %||% gns
+  gns <- names(genes) %||% genes
   
   # Format gene expression input data
-  exp_data <- exp_data %>%
+  all_exp_data <- all_exp_data %>%
     imap_dfr(~ {
       .x %>%
-        FetchData(c(type_clmn, "orig.ident", "treatment", "rep", genes)) %>%
+        FetchData(c(type_clmn, "orig.ident", "treatment", "rep", gns)) %>%
         as_tibble(rownames = ".cell_id") %>%
         mutate(tm = .y) %>%
-        pivot_longer(all_of(genes))
+        pivot_longer(all_of(gns))
     }) %>%
                                                      # only use mock data and 8hpi data from 8hpi object
     filter(treatment != "8hpi" | tm != "24hpi") %>%  # exclude 8hpi CHIKV data from 24hpi objects (e.g. so_merge)
@@ -1258,7 +1320,7 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
     mutate(treatment = ifelse(treatment %in% lvls, treatment, tm))
     
   # Only include samples with >10 cells for each replicate
-  exp_data <- exp_data %>%
+  all_exp_data <- all_exp_data %>%
     group_by(!!sym(type_clmn), treatment) %>%
     mutate(reps = list(unique(rep))) %>%
     group_by(!!sym(type_clmn), treatment, rep) %>%
@@ -1271,28 +1333,28 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
     ungroup()
   
   # Format DEG input data
-  deg_data <- deg_data %>%
+  all_degs_data <- all_degs_data %>%
     imap_dfr(~ {
       .x %>%
-        dplyr::filter(gene %in% genes) %>%
+        dplyr::filter(gene %in% gns) %>%
         dplyr::mutate(treatment = .y) %>%
         dplyr::select(gene, treatment, !!sym(type_clmn), max_pval)
     })
   
   # Filter for top cell types to plot
   if (!is.null(exclude_cell_types)) {
-    exp_data <- exp_data %>%
+    all_exp_data <- all_exp_data %>%
       filter(!(!!sym(type_clmn) %in% exclude_cell_types))
     
-    deg_data <- deg_data %>%
+    all_degs_data <- all_degs_data %>%
       filter(!(!!sym(type_clmn) %in% exclude_cell_types))
   }
   
   if (!is.null(cell_types)) {
     if (is.numeric(cell_types)) {
-      all_types <- distinct(exp_data, lec_type)  # Cell types with no DEGs will
-                                                 # not be included in deg_data,
-      cell_types <- deg_data %>%                 # add these as 0's
+      all_types <- distinct(all_exp_data, lec_type)  # Cell types with no DEGs will
+                                                     # not be included in all_degs_data,
+      cell_types <- all_degs_data %>%                # add these as 0's
         group_by(!!sym(type_clmn)) %>%
         summarize(n_genes = n(), .groups = "drop") %>%
         full_join(all_types, by = "lec_type") %>%
@@ -1302,12 +1364,12 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
         pull(type_clmn)
     }
     
-    exp_data <- exp_data %>%
+    all_exp_data <- all_exp_data %>%
       dplyr::filter(!!sym(type_clmn) %in% cell_types)
   }
   
   # Format data for plotting points
-  plt_dat <- exp_data %>%
+  plt_dat <- all_exp_data %>%
     group_by(!!sym(type_clmn), treatment, name) %>%
     summarize(
       n       = n(),
@@ -1322,8 +1384,8 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
       x_end     = match(treatment, lvls),
       x         = x_end - 1,
       treatment = fct_relevel(treatment, lvls),
-      cluster   = gns[name],
-      name      = fct_relevel(name, genes)
+      cluster   = genes[name],
+      name      = fct_relevel(name, gns)
     )
   
   # Format data for plotting lines
@@ -1334,7 +1396,7 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
     dplyr::select(name, treatment, !!sym(type_clmn), value)
   
   ln_dat <- plt_dat %>%
-    left_join(deg_data, by = c(name = "gene", "treatment", type_clmn)) %>%
+    left_join(all_degs_data, by = c(name = "gene", "treatment", type_clmn)) %>%
     
     dplyr::filter(x > 0) %>%  # remove rows that start at 0 (occurs for mock)
     
@@ -1357,7 +1419,7 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
     mutate(
       Upregulated = as.character(!is.na(max_pval)),
       Upregulated = fct_relevel(Upregulated, c("TRUE", "FALSE")),
-      name        = fct_relevel(name, genes)
+      name        = fct_relevel(name, gns)
     )
   
   # Only show cell types with at least one gene upregulated for any timepoint
@@ -1369,7 +1431,7 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
   }
   
   # Create plots
-  aspect <- length(genes) / n_distinct(plt_dat$name) * 0.9
+  aspect <- length(gns) / n_distinct(plt_dat$name) * 0.9
   
   res <- plt_dat %>%
     filter(!!sym(type_clmn) %in% unique(pull(ln_dat, type_clmn))) %>%
@@ -1413,6 +1475,145 @@ create_gene_plots <- function(exp_data = list("8hpi" = so_8, "24hpi" = so_merge)
       strip.placement = "outside",
       axis.title      = element_blank()
     )
+  
+  res
+}
+
+#' Create expanded GO summary plots
+#' 
+#' @param go_in data.frame containing GO results (compareClusterResult)
+#' @param degs_in data.frame containing DEG results, this is used to select
+#' the top differentially expressed genes for go_in
+#' @param all_exp_data Named list of Seurat objects containing all expression
+#' data wanting to plot
+#' @param all_degs_data Named list of data.frames containing DEGs, this is used to
+#' determine which genes are upregulated for each cell type and timepoint. DEGs
+#' need to be provided for each Seurat object provided to all_exp_data
+#' @param n_clusters Number of top GO clusters to plot, clusters are sorted by
+#' number of terms, with the top clusters having the most terms
+#' @param n_terms The number of top terms to show for each cluster, terms are
+#' sorted by the number of cell types that share the term and the overall mean
+#' p-value for the term (averaged across all cell types)
+#' @param n_genes Number of top genes to plot for each GO cluster
+#' @param pval Adjusted p-value cutoff for marking significant terms
+#' @param n_overlap Minimum number of genes needed to overlap the term for it to
+#' be marked as significant
+#' @param n_shared Minimum number of cell types that term has to be shared with
+#' for it to be included
+#' @param exclude_cell_types Cell types to exclude from plots
+create_go_summary_plots <- function(go_in, degs_in,
+                                    all_exp_data = list(
+                                      "8hpi" = so_8, "24hpi" = so_merge
+                                    ),
+                                    all_degs_data = list(
+                                      "8hpi"  = degs[["so_8-up_lectype"]],
+                                      "24hpi" = degs[["so_merge-up_lectype"]]
+                                    ),
+                                    n_clusters = 5, n_terms = 6, n_genes = 4,
+                                    pval = 0.05, n_overlap = 3, n_shared = 1,
+                                    exclude_cell_types = NULL
+                                    ) {
+  
+  # Cluster GO terms
+  clsts <- go_in %>%
+    get_go_clusters(
+      k         = n_clusters,
+      pval      = pval,
+      n_overlap = n_overlap,
+      n_shared  = n_shared,
+      exclude_cell_types = NULL
+    )
+  
+  if (is.null(clsts)) return(NULL)
+  
+  # Create tree
+  clst_ids <- as.character(unique(sort(clsts$clusters$cluster)))
+  
+  clst_clrs <- set_names(
+    unname(type_cols)[1:n_distinct(clst_ids)],
+    clst_ids
+  )
+  
+  cl <- split(
+    names(clsts$clusters_object),
+    clsts$clusters_object
+  )
+  
+  tr <- ggtree(clsts$object, linewidth = 1)
+  
+  clades <- cl %>%
+    map_int(~ MRCA(tr, .x))
+  
+  tr <- groupClade(tr, clades, group_name = "cluster") +
+    aes(color = cluster) +
+    scale_color_manual(values = clst_clrs) +
+    geom_tiplab(angle = 90, hjust = 1, nudge_x = -0.1) +
+    layout_dendrogram() +
+    theme(
+      legend.position = "none",
+      plot.margin = margin(6, 6, 250, 6)
+    )
+  
+  # Create heatmaps
+  heat <- clsts$clusters %>%
+    create_go_heatmap(
+      go_in      = go_in,
+      n_overlap  = n_overlap,
+      n_clusters = n_clusters,
+      n_genes    = 0,           # Min genes represented on plot for cell type
+      n_terms    = n_terms,     # to be shown on plot
+      n_col      = 1,
+      free_y     = FALSE,
+      clrs       = clst_clrs,
+      exclude_cell_types = exclude_cell_types
+    )
+  
+  heat$heatmap <- heat$heatmap +
+    theme(axis.text = element_text(size = 10))
+  
+  # Example genes to plot
+  heat_terms <- heat$terms %>%
+    dplyr::select(Description, cluster, ID)
+  
+  gns <- get_go_genes(
+    go_in    = go_in@compareClusterResult,
+    degs_in  = degs_in,
+    clust_in = heat_terms,
+    genes    = n_genes
+  )
+  
+  # Create gene plots
+  gn_plts <- create_go_gene_plots(
+    all_exp_data       = all_exp_data,
+    all_degs_data      = all_degs_data,
+    genes              = gns,
+    cell_types         = Inf,
+    clrs               = clst_clrs,
+    exclude_cell_types = exclude_cell_types
+  ) +
+    theme(
+      plot.margin = margin(6, 40, 6, 40, unit = "pt"),
+      axis.text   = element_text(size = 7),
+      strip.text  = element_text(size = 8)
+    )
+  
+  # Create final figure
+  bot <- plot_grid(
+    heat$heatmap + theme(plot.margin = margin(6, 40, 6, 40, unit = "pt")),
+    gn_plts,
+    nrow = 1,
+    labels = c("B", "C"),
+    rel_widths = c(0.9, 1),
+    align = "h",
+    axis  = "tb"
+  )
+  
+  res <- plot_grid(
+    tr, bot,
+    ncol = 1,
+    rel_heights = c(0.3, 1),
+    labels = "A"
+  )
   
   res
 }
