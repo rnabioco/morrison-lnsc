@@ -1621,8 +1621,7 @@ sobjs <- sobjs %>%
           rename_with(
             .cols = starts_with("CHIKV_AF15561"),
             ~ str_remove(.x, "_AF15561")
-          ) %>%
-          mutate(pct_CHIKV = nCount_CHIKV / (nCount_RNA + nCount_CHIKV))
+          )
       })
   })
 
@@ -1692,7 +1691,10 @@ so_raw <- merge(sobjs[[1]], sobjs[-1])
 
 save_objs(so_raw, "so_raw_8", ob_dir = params$so_dir)
 
-so_raw_df <- read_tsv(here(params$so_dir, "so_raw_8.tsv.gz"))
+so_raw_df <- read_tsv(
+  here(params$so_dir, "so_raw_8.tsv.gz"),
+  show_col_types = FALSE, progress = FALSE
+)
 
 rm(sobjs, so_raw)
 ```
@@ -1711,10 +1713,6 @@ so_enr <- mats %>%
         proj_name   = .y,
         virus_str   = "^CHIKV",
         virus_assay = "CHIKV"
-      ) %>%
-      mutate_meta(
-        mutate,
-        pct_CHIKV = nCount_CHIKV / (nCount_CHIKV + nCount_RNA)
       )
   })
 
@@ -1733,6 +1731,7 @@ so_enr <- so_enr %>%
   )
 
 # Add new CHIKV counts to meta.data from unfiltered Seurat objects
+# create table with all cells from raw and enriched objects combined
 chikv_feats <- c(
   "enr_5"            = "chikv_CHIKV-AF15561-5",
   "enr_sgRNA"        = "chikv_CHIKV-AF15561-sgRNA",
@@ -1757,6 +1756,8 @@ clmns <- c(
   "UMAP_1", "UMAP_2"
 )
 
+# Add UMAP coordinates to data.frame
+# cells that did not pass QC will have NAs
 so_enr_df <- so@meta.data %>%
   as_tibble(rownames = "cell_id") %>%
   dplyr::select(all_of(clmns)) %>%
@@ -1768,7 +1769,7 @@ enr_counts <- so_enr_df %>%
     across(starts_with("enr_"), ~ replace_na(.x, 0)),
     
     enr_pct_CHIKV = (enr_nCount_CHIKV / (enr_nCount_CHIKV + enr_nCount_RNA)) * 100,
-    enr_pct_CHIKV = replace_na(enr_pct_CHIKV, 0),  # some cells have 0 enr counts
+    enr_pct_CHIKV = replace_na(enr_pct_CHIKV, 0),  # small number of cells have 0 total enr counts
     
     tot_nCount_CHIKV = nCount_CHIKV + enr_nCount_CHIKV,
     tot_nCount_RNA   = nCount_RNA   + enr_nCount_RNA,
@@ -1782,8 +1783,8 @@ enr_counts <- so_enr_df %>%
   column_to_rownames("cell_id")
 
 # Add enriched counts to object
-# use enriched counts to identify CHIKV-high, lose 7 cells that have >0
-# unenriched counts but 0 enriched counts
+# use enriched counts to identify CHIKV-high
+# lose 7 cells that have >0 unenriched counts but 0 enriched counts
 so <- so %>%
   AddMetaData(enr_counts) %>%
   mutate_meta(
@@ -1800,8 +1801,9 @@ stopifnot(identical(unique(so$orig.ident), unique(so_enr_df$orig.ident)))
 save_objs(so, "so_8", ob_dir = params$so_dir)
 save_objs(so_enr, "so_enr_8", ob_dir = params$so_dir, save_meta = FALSE)
 
+# Save enriched table that includes stats for all cells regardless of QC
 so_enr_df %>%
-  write_tsv(here(params$so_dir, "so_enr_8.tsv.gz"))
+  write_tsv(here(params$so_dir, "so_enr_8.tsv.gz"), progress = FALSE)
 
 rm(so_enr)
 ```
@@ -1822,7 +1824,7 @@ so_8 <- so
 
 rm(so)
 
-so_8  <- RenameCells(so_8, add.cell.id = "8hpi")
+so_8  <- RenameCells(so_8,  add.cell.id = "8hpi")
 so_24 <- RenameCells(so_24, add.cell.id = "24hpi")
 
 # Merge 8 and 24 hpi objects
@@ -1833,6 +1835,7 @@ so_merge <- merge(so_8, so_24) %>%
   RunUMAP(dims = 1:40)
   
 # Integrate samples
+# integrate 24hpi-CHIKV samples with remaining samples
 so_merge <- so_merge %>%
   mutate_meta(
     mutate,
@@ -1865,11 +1868,11 @@ so_merge <- so_merge %>%
     -any_of(c("UMAP_1", "UMAP_2", "rough_type", "rough_r", "b_score", "t_score"))
   ) %>%
   clustify(
-    ref_mat     = ref_immgen,
-    cluster_col = type_clst,
-    threshold   = 0.6,
-    n_genes     = 2000,
-    rename_prefix = "rough"
+    ref_mat       = ref_immgen,
+    cluster_col   = type_clst,
+    rename_prefix = "rough",
+    n_genes       = 2000,
+    threshold     = 0.6
   )
 
 # Annotate B and T cells
@@ -1975,7 +1978,6 @@ so_merge <- so_merge %>%
 
 ```{r "lec subsets", eval = create_obj}
 # Create LEC objects
-# * use original broad cell types based on clustering resolution 5
 # * merge 8hpi and 24hpi LECs and BECs, re-cluster
 # * integrate replicates and integrate 24hpi CHIKV sample with all other samples
 # * key issue with past attempts to perform integrated analysis is that
@@ -2004,10 +2006,9 @@ so_lec <- so_lec %>%
 # correlations
 resolutions <- seq(3, 15, 0.5)
 n_genes     <- seq(500, 2000, 500)
-obj         <- "all"
 met         <- "spearman"
 bulk        <- "mean"
-clst_params <- as.list(expand_grid(resolutions, n_genes, obj, met, bulk))
+clst_params <- as.list(expand_grid(resolutions, n_genes, met, bulk))
 
 so_lec <- so_lec %>%
   FindNeighbors(reduction = "harmony", dims = 1:40) %>%
@@ -2024,15 +2025,12 @@ cluster_param_results <- clst_params %>%
     # Annotate cell types
     clmn <- str_c("RNA_snn_res.", rsln)
     
-    if (args$obj == "mock") obj <- subset(so_lec, treatment == "mock")
-    else                    obj <- so_lec
-    
-    typs <- obj %>%
+    typs <- so_lec %>%
       clustify(
-        ref_mat     = ref_lec,
-        cluster_col = clmn,
-        n_genes     = n_gns,
-        threshold   = 0.55,
+        ref_mat           = ref_lec,
+        cluster_col       = clmn,
+        n_genes           = n_gns,
+        threshold         = 0.55,
         compute_method    = args$met,
         pseudobulk_method = args$bulk
       )
@@ -2062,6 +2060,7 @@ cluster_param_results <- clst_params %>%
       mutate(frac_type = n_type / sum(n_type)) %>%
       ungroup()
     
+    # Calculate fraction CHIKV-high cells for each cell type
     chikv <- res %>%
       filter(tm == "24hpi", treatment == "CHIKV", chikv_grp == "CHIKV-high") %>%
       group_by(type) %>%
@@ -2069,32 +2068,27 @@ cluster_param_results <- clst_params %>%
       mutate(frac_chikv = n_chikv / sum(n_chikv)) %>%
       ungroup()
     
+    # Identify cell types with highest Marco/Madcam1 expression
     marks <- res %>%
       group_by(tm, treatment, type) %>%
       summarize(
-        Marco_mn    = mean(Marco),
-        Marco_med   = median(Marco),
-        Madcam1_mn  = mean(Madcam1),
-        Madcam1_med = median(Madcam1),
+        across(c(Marco, Madcam1), mean, .names = "{.col}_mn"),
+        across(c(Marco, Madcam1), median, .names = "{.col}_med"),
         .groups = "drop"
-      ) %>%
+      ) %>%      
       group_by(tm, treatment) %>%
       summarize(
-        Marco_mn    = type[Marco_mn == max(Marco_mn)],
-        Marco_med   = type[Marco_med == max(Marco_med)],
-        Madcam1_mn  = type[Madcam1_mn == max(Madcam1_mn)],
-        Madcam1_med = type[Madcam1_med == max(Madcam1_med)],
+        across(
+          matches("^(Marco|Madcam1)_(mn|med)$", ignore.case = FALSE),
+          ~ type[.x == max(.x)]
+        ),
         .groups = "drop"
       )
-    
-    typ_diff <- so_lec@meta.data %>%
-      group_by(tm, treatment, lec_type) %>%
-      summarize(n_old_type = n(), .groups = "drop")
 
+    # Format summary data.frame    
     res <- typ %>%
       full_join(chikv, by = "type") %>%
       full_join(marks, by = c("tm", "treatment")) %>%
-      full_join(typ_diff, by = c("tm", "treatment", c(type = "lec_type"))) %>%
       mutate(
         rsln     = clmn,
         n_genes  = args$n_genes,
@@ -2102,12 +2096,7 @@ cluster_param_results <- clst_params %>%
         type_key = list(typs),
         n_small_clusters    = n_few,
         frac_small_clusters = frac_few
-      ) %>%
-      rowwise() %>%
-      mutate(
-        frac_old_diff = abs(diff(c(n_type, n_old_type))) / n_old_type
-      ) %>%
-      ungroup()
+      )
     
     res
   })
@@ -2117,7 +2106,7 @@ cluster_param_results <- clst_params %>%
 # Determine consensus annotations
 # determine which cell type annotations are most consistent for each cell
 ann_key <- cluster_param_results %>%
-  distinct(type_key, rsln, n_genes, obj) %>%
+  distinct(type_key, rsln, n_genes) %>%
   mutate(id = row_number())
 
 ann_df <- so_lec@meta.data %>%
@@ -2167,7 +2156,7 @@ so_lec <- so_lec %>%
   AddMetaData(top_frac, col.name = "top_frac")
 
 # Cluster cell type annotations
-# want to identify primary annotation schemes
+# want to identify common annotation patterns
 ann_mat <- ann_df %>%
   dplyr::select(.cell_id, starts_with("type-"))
 
@@ -2183,21 +2172,22 @@ ann_mat <- ann_mat %>%
   as.matrix() %>%
   t()
 
+set.seed(11)
+
 ann_clsts <- kmeans(ann_mat, centers = 10)
 
 ann_clst_res <- tibble(
-  key = names(ann_clsts$cluster),
-  id  = unname(ann_clsts$cluster),
-  type = "all"
+  key     = names(ann_clsts$cluster),
+  cluster = unname(ann_clsts$cluster)
 ) %>%
   separate(key, into = c("blank", "rsln", "n_genes"), sep = "-") %>%
   dplyr::select(-blank) %>%
-  group_by(id) %>%
+  group_by(cluster) %>%
   mutate(n = n()) %>%
   dplyr::slice(1) %>%
   ungroup() %>%
   arrange(desc(n)) %>%
-  mutate(id = row_number())
+  mutate(rank = row_number())
 
 # Plot representative settings for each cluster
 ann_clst_plots <- ann_clst_res %>%

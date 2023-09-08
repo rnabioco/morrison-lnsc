@@ -396,7 +396,7 @@ create_virus_obj <- function(mat_dir, proj_name = "SeuratProject",
         TRUE ~ "pass"
       ),
       
-      !!v_pct := !!v_counts / (!!v_counts + !!rna_counts)
+      !!v_pct := (!!v_counts / (!!v_counts + !!rna_counts)) * 100
     )
   
   res
