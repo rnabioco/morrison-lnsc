@@ -1611,8 +1611,10 @@ go_sim_data <- godata(
   ont     = "BP"
 )
 
-# Comparisons to use for GO analysis
-go_comps <- grep("^so_(8|merge)-up_lectype$", names(degs), value = TRUE)
+# Comparisons to use for GO analysis and plotting
+# only want to use two main comparisons for figures
+go_comps  <- grep("^so_(8|24|merge)(_chikv|)-(up|down)_lectype$", names(degs), value = TRUE)
+plt_comps <- grep("^so_(8|merge)-up_lectype$", names(degs), value = TRUE)
 
 # Get GO terms
 # only use top 200 DEGs sorted by max p-value
@@ -1655,13 +1657,22 @@ exclude_cell_types <- c(
   "Erythrocytes", "unassigned", "unassigned-LEC"
 )
 
-# Only use terms with >= 3 overlapping genes for 8 hpi (and CHIKV-high/low)
+# Set overlap cutoff for GO terms to use for clustering
+# only use terms with >= 3 overlapping genes for 8 hpi (and CHIKV-high/low)
 # and >= 10 overlapping genes for 24 hpi
-go_ovlp <- set_names(c(3, 10), go_comps)
+min_ovlp_re <- "^so_(8|24_chikv)"
+  
+go_ovlp <- set_names(
+  rep(10, length(go_comps)),
+  go_comps
+)
 
+go_ovlp[grepl(min_ovlp_re, names(go_ovlp))] <- 3
+
+# Cluster GO terms
 clst_args <- list(
-  go_in = go[go_comps],
-  ovlp  = go_ovlp[go_comps]
+  go_in = go[plt_comps],
+  ovlp  = go_ovlp[plt_comps]
 )
 
 clusters <- clst_args %>%
@@ -1683,12 +1694,16 @@ clusters <- clst_args %>%
 
 # Calculate similarity between each 8hpi and 24hpi GO cluster
 # want to determine which GO clusters are most similar to each other
-clusters_merged <- clusters$`so_merge-up`$clusters %>%
-  mutate(cluster = str_c("24hpi-", cluster))
-
-clusters_merged <- clusters$`so_8-up`$clusters %>%
-  mutate(cluster = str_c("8hpi-", cluster)) %>%
-  bind_rows(clusters_merged)
+clusters_merged <- clusters[plt_comps] %>%
+  imap(~ {
+    nm <- str_extract(.y, "(?<=so_)[0-9a-zA-Z]+")
+    nm <- str_replace(nm, "merge", "24")
+    nm <- str_c(nm, "hpi-")
+    
+    .x$clusters %>%
+      mutate(cluster = str_c(nm, cluster))
+  }) %>%
+  bind_rows()
 
 cluster_lvls <- unique(clusters_merged$cluster)
 
@@ -1740,7 +1755,7 @@ go_clrs <- setNames(
     c(`1` = "#E69F00", `2` = "#56B4E9"),
     c(`1` = "#D7301F", `2` = "#6A51A3")
   ),
-  go_comps
+  plt_comps
 )
 
 # Create heatmaps
@@ -1748,10 +1763,10 @@ go_clrs <- setNames(
 # are not in exclude_cell_types
 # pval and n_overlap cutoffs should match those used for clustering
 plt_args <- list(
-  go_in    = go[go_comps],
-  clst_dat = clusters[go_comps],
-  clrs     = go_clrs[go_comps],
-  ovlp     = go_ovlp[go_comps],
+  go_in    = go[plt_comps],
+  clst_dat = clusters[plt_comps],
+  clrs     = go_clrs[plt_comps],
+  ovlp     = go_ovlp[plt_comps],
   clsts    = list(1, 1:2)
 )
 
@@ -1776,10 +1791,10 @@ go_heat <- plt_args %>%
 
 ```{r "inflammatory examples"}
 plt_args <- list(
-  go_in   = go[go_comps],
-  degs_in = degs[go_comps],
-  heat    = go_heat[go_comps],
-  clrs    = go_clrs[go_comps],
+  go_in   = go[plt_comps],
+  degs_in = degs[plt_comps],
+  heat    = go_heat[plt_comps],
+  clrs    = go_clrs[plt_comps],
   genes   = list(
     c("Irf7", "Bst2", "Zbp1"),
     c("Ccl2", "Isg15", "Ifi203", "Cxcl9", "Cxcl10", "Ccl7")
@@ -1859,25 +1874,18 @@ u_clrs <- set_names(
 )
 
 # UMAP showing sample groups
-treat_u <- so_merge_df %>%
-  create_type_umaps(
-    "tm_treat",
-    x          = "UMAP_1",
-    y          = "UMAP_2",
-    size       = 0.05,
-    plot_lvls  = u_lvls,
-    clrs       = u_clrs,
-    facet_plot = NULL,
-    n_lab      = TRUE
-  )
+plt_args <- list(
+  data_col  = c("tm_treat", "cell_type"),
+  clrs      = list(u_clrs, type_cols),
+  plot_lvls = list(u_lvls, NULL)
+)
 
-# UMAP showing cell types
-typ_u <- so_merge_df %>%
-  create_type_umaps(
-    "cell_type",
+fig5_umaps <- plt_args %>%
+  pmap(
+    create_type_umaps,
+    so_in      = so_merge_df,
     x          = "UMAP_1",
     y          = "UMAP_2",
-    clrs       = type_cols,
     size       = 0.05,
     facet_plot = NULL,
     n_lab      = TRUE
@@ -1885,7 +1893,7 @@ typ_u <- so_merge_df %>%
 
 # Create final figure
 u_fig <- plot_grid(
-  treat_u, typ_u,
+  plotlist   = fig5_umaps,
   align      = "h",
   axis       = "tb",
   nrow       = 1,
@@ -1913,33 +1921,33 @@ F.  A selection of top upregulated genes identified for the terms shown in E are
 G.  Expression of homeostatic cytokines is shown for BECs, FRCs (combination of FRCs and PvCs shown in A-F), and LECs as described in D. A solid line indicates that the gene is significantly up- or down-regulated between the samples.  
 
 ```{r "GO figures", fig.width = 13, fig.height = 18}
-top <- plot_grid(
-  go_heat$`so_8-up`$heatmap,
-  go_examples$`so_8-up_lectype`,
-  
-  labels = c("C", "D"),
-  label_size = ttl_pt2 * 1.5,
-  hjust  = c(-0.4, 1),
-  vjust  = 0.98,
-  nrow   = 1,
-  align  = "h",
-  axis   = "tb"
+plt_args <- list(
+  heat     = go_heat[plt_comps],
+  examples = go_examples[plt_comps],
+  labels   = list(c("C", "D"), c("E", "F")),
+  vjust    = c(0.98, 1.5)
 )
 
-bot <- plot_grid(
-  go_heat$`so_merge-up`$heatmap,
-  go_examples$`so_merge-up_lectype`,
-  
-  labels = c("E", "F"),
-  label_size = ttl_pt2 * 1.5,
-  hjust  = c(-0.4, 1),
-  nrow   = 1,
-  align  = "h",
-  axis   = "tb"
-)
+plt_panels <- plt_args %>%
+  pmap(~ {
+    args <- list(...)
+    
+    plot_grid(
+      args$heat$heatmap, args$examples,
+      labels     = args$labels,
+      label_size = ttl_pt2 * 1.5,
+      vjust      = args$vjust,
+      hjust      = c(-0.4, 1),
+      nrow       = 1,
+      align      = "h",
+      axis       = "tb"
+    )
+  })
 
 plot_grid(
-  u_fig, top, bot, other_examples,
+  u_fig,
+  plt_panels[[1]], plt_panels[[2]],
+  other_examples,
   ncol = 1,
   rel_heights = c(0.8, 0.64, 1, 0.8)
 )
@@ -1965,9 +1973,9 @@ plt_args %>%
   pwalk(~ {
     args <- list(...)
     
-    ttl <- str_extract(args$ttl, "[0-9a-zA-Z]+-[a-zA-Z]+")
-    ttl <- str_replace(ttl, "^merge", "24hpi-8hpi")
-    ttl <- str_replace(ttl, "^8", "8hpi-mock")
+    ttl <- str_remove(args$ttl, "^so_")
+    ttl <- str_remove(ttl, "_[a-zA-Z]+$")
+    ttl <- str_replace(ttl, "^merge", "24-8")
     
     cat("\n\n#### ", ttl, "\n\n")
     
