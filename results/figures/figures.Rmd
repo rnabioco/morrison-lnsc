@@ -1910,17 +1910,17 @@ u_fig <- plot_grid(
 
 Differentially expressed genes were identified for each cell type for mock (from 8 hpi experiment) vs 8 hpi and 8 hpi vs 24 hpi. Since the 8 hpi timepoint only has two biological replicates, the top two replicates from the 24 hpi timepoint with the most cells were used for the 8 vs 24 hpi comparison. Genes were considered upregulated if the log2 fold change was >0.15 for 8 hpi and >0.25 for 24 hpi for all replicates and the largest p value for all replicates was <0.05.
 
-```{r "DEG parameters"}
+```{r "DEG parameters", eval = FALSE}
 as.data.frame(deg_args)
 ```
 
 <br>
 
-Gene ontology terms (biological process) were identified for the top 200 upregulated genes (sorted by maximum p value between replicates) for each cell type. Terms were filtered to only include those with an adjusted p-value <0.05 and at least 3 or 10 upregulated genes overlapping the term for the 8 hpi and 24 hpi timepoints, respectively. Terms with <10 or >750 genes were excluded from the analysis. Terms identified for each cell type were combined and clustered into 5 modules based on the pairwise overlap between terms.
+Gene ontology terms (biological process) were identified for the top 200 upregulated genes (sorted by maximum p value between replicates) for each cell type. Terms were filtered to only include those with an adjusted p-value <0.05 and at least 3 or 10 upregulated genes overlapping the term for the 8 hpi and 24 hpi timepoints, respectively. Terms with <10 or >750 genes were excluded from the analysis. Terms identified for each cell type were combined and clustered into 5 modules based on the pairwise overlap between terms. The top modules, sorted by number of terms, are shown in C and E.
 
 A.  UMAP projection shows cells from the 8 hpi and 24 hpi timepoints, cells are colored by sample.
 B.  UMAP projection shows cells from the 8 hpi and 24 hpi timepoints, cells are colored by cell type.
-C.  The 8 hpi timeopoint shows upregulation of genes associated with an innate immune response. Enrichment scores are shown for each cell type for the primary gene ontology module identified for genes upregulated at the 8 hpi timepoint. Enrichment score is the fraction of upregulated genes overlapping the term divided by the fraction of background genes overlapping the term. GO terms that are significantly enriched are marked by a diamond.
+C.  Enrichment scores are shown for each cell type for the primary gene ontology module identified for genes upregulated at the 8 hpi timepoint. The top five terms, sorted by number of cell types showing significant enrichment for the term, are shown. Enrichment scores were calculated as the fraction of upregulated genes overlapping the term divided by the fraction of background genes overlapping the term. GO terms that are significantly enriched are marked by a diamond.
 D.  A selection of top upregulated genes identified for the terms shown in A are plotted. Points show the median expression for the mock (m), 8 hpi (8h), and 24 hpi (24h) samples, grey bars show the interquartile range. A solid line indicates that the gene is significantly upregulated between the samples.
 E.  Enrichment scores are shown for the top GO modules identified for the 24 hpi timepoint, as described in C.
 F.  A selection of top upregulated genes identified for the terms shown in E are plotted as described in D.
