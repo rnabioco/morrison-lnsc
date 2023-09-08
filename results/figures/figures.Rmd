@@ -52,9 +52,9 @@ in the draining lymph node at 8 hpi
 A.  UMAP projection shows the relative viral burden for the 8 hpi timepoint. CHIKV score was calculated using the CHIKV-capture libraries. For each cell the number of counts aligning to the CHIKV genome was divided by the total counts (mouse + CHIKV counts) for the cell. A pseudo count (smallest non-zero value / 2) was added to each value plotted.
 B.  UMAP projection shows CHIKV+ cells (CHIKV score >0) for the 8 hpi timepoint. Cell types with <=3 CHIKV+ cells are labeled as "other".
 C.  CHIKV scores (as described in A) are shown for CHIKV+ cell types with >40 total cells and >3 CHIKV+ cells for the 8 hpi sample. P values were calculated using a one-sided Wilcoxon rank sum test with Bonferroni correction to determine whether CHIKV scores for each cell type were elevated when compared with all other CHIKV+ cells. Only adjusted p values <0.05 are shown. For each boxplot, the central lines, box limits, and whiskers represent medians, the interquartile range (IQR), and min/max values that are not outliers, respectively. Outliers are shown as points and include any values that are more than 1.5× IQR away from the box.
-D.  The fraction of cells identified as CHIKV+ is shown for each cell type in C. Labels show the number of CHIKV+ cells/total cells. P values were calculated using a one-sided hypergeometric test with Bonferroni correction to determine whether the frequency of CHIKV+ cells was greater than expected for each cell type. Only adjusted p values <0.05 are shown.
-E.  MARCO expression is shown for fLECs for mock-infected cells and CHIKV-infected cells classified as either CHIKV- or CHIKV+. P values were calculated using a two-sided Wilcoxon rank-sum test with Bonferroni correction.
-F.  Madcam1 expression is shown for fLECs as described in E. Boxplots were drawn as described in C.
+D.  The fraction of cells identified as CHIKV+ is shown for each cell type in C. Labels show the number of CHIKV+ cells/total cells. P values were calculated using a one-sided hypergeometric test with Bonferroni correction to determine whether the frequency of CHIKV+ cells is greater than expected for each cell type. Only adjusted p values <0.05 are shown.
+E.  MARCO expression is shown for fLECs for mock-infected cells and CHIKV-infected cells classified as either CHIKV- or CHIKV+. P values were calculated using a two-sided Wilcoxon rank-sum test with Bonferroni correction. Boxplots were drawn as described in C.
+F.  Madcam1 expression is shown for fLECs as described in E.
 
 ```{r "CHIKV score umap", fig.width = 10, fig.height = 10}
 # Format plot data
@@ -475,7 +475,7 @@ so_24 %>%
 
 ### Enriched counts
 
-The CHIKV score shown in figures 1A and C is calculated by dividing CHIKV counts from the CHIKV-capture library by total counts (CHIKV + mouse) from the CHIKV-capture library for each cell. For this calculation we are assuming that mouse counts from the capture library reflect relative mouse counts from the original libraries (i.e. the relationship between CHIKV counts and mouse counts has not been affected by CHIKV enrichment).
+The CHIKV score shown in figure 1A and C is calculated by dividing CHIKV counts from the CHIKV-capture library by total counts (CHIKV + mouse) from the CHIKV-capture library for each cell. For this calculation we are assuming that mouse counts from the capture library reflect relative mouse counts from the original libraries (i.e. the relationship between CHIKV counts and mouse counts has not been affected by CHIKV enrichment).
 
 There is a strong correlation between mouse counts from the capture libraries and original libraries, this validates the use of mouse counts from the capture libraries as a normalization factor.
 
@@ -860,8 +860,8 @@ bx_comps %>%
 CHIKV may target MARCO-expressing LECs for infection
 
 A.  UMAP projection shows annotated cell types for the 24 hpi timepoint.
-B.  UMAP projection shows CHIKV sgRNA ratio (sgRNA counts / 5' counts) for the 24 hpi timepoint. A pseudo count of 1 was added to the sgRNA and 5' counts to elminate division by zero.
-C.  The fraction of cells identified as CHIKV-high is shown for each biological replicate for cell types with >40 total cells and >3 CHIKV-high cells for the 24 hpi timepoint. Labels show the number of CHIKV-high cells/total cells. P values were calculated using a one-sided hypergeometric test with Bonferroni correction to determine whether the frequency of CHIKV-high cells was greater than expected for each cell type. Only adjusted p values <0.05 are shown.
+B.  UMAP projection shows CHIKV sgRNA ratio (sgRNA counts / 5' counts) for the 24 hpi timepoint. A pseudo count of 1 was added to the sgRNA and 5' counts to eliminate division by zero.
+C.  The fraction of cells identified as CHIKV-high is shown for each biological replicate for cell types with >40 total cells and >3 CHIKV-high cells for the 24 hpi timepoint. Labels show the number of CHIKV-high cells/total cells. P values were calculated using a one-sided hypergeometric test as described in figure 1D.
 D.  CHIKV sgRNA ratio is shown for cells with >0 sgRNA counts, >0 5' counts, and >40 total cells. P values were calculated using a two-sided Wilcoxon rank sum test with Bonferroni correction. For each violin plot, the central point and flanking lines represent medians and the interquartile range (IQR), respectively.
 E.  The correlation between CHIKV sgRNA ratio and QC metrics is shown for CHIKV-high cells for Marco LECs and unassigned LECs.
 
@@ -913,28 +913,31 @@ C.  The correlation between annotated endothelial subsets and reference data is 
 D.  The expression of select marker genes is shown for the 8 hpi and 24 hpi timepoints.
 
 ```{r "fig S3 cell type UMAPs", fig.width = 12, fig.height = 6}
-# Load merged objects containing all cells
-all_u <- so_merge_df %>%
-  create_type_umaps(
-    "cell_type",
-    facet_plot = c("tm", "treatment"),
-    clrs       = type_cols,
-    ttl        = "Cell types",
-    size       = 0.001
-  )
+plt_args <- list(
+  so_in    = list(so_merge_df, so_lec),
+  data_col = c("cell_type", "lec_subtype"),
+  clrs     = list(type_cols, lec_type_cols),
+  ttl      = c("Cell types", "Endothelial cell types")
+)
 
-lec_u <- so_lec %>%
-  create_type_umaps(
-    "lec_subtype",
-    facet_plot = c("tm", "treatment"),
-    clrs       = lec_type_cols,
-    ttl        = "Endothelial cell types",
-    size       = 0.001
-  )
+type_umaps <- plt_args %>%
+  pmap(~ {
+    args <- list(...)
+    
+    create_type_umaps(
+      so_in      = args$so_in,
+      data_col   = args$data_col,
+      facet_plot = c("tm", "treatment"),
+      clrs       = args$clrs,
+      size       = 0.001,
+      ttl        = args$ttl
+    ) +
+      theme(legend.position = "bottom")
+  })
 
 # Create final figure
 type_fig <- plot_grid(
-  all_u, lec_u,
+  plotlist = type_umaps,
   align = "h",
   axis  = "tb",
   nrow  = 1,
@@ -1771,82 +1774,6 @@ go_heat <- plt_args %>%
   })
 ```
 
-```{r "GO CLUSTER TERM SIMILARITY", eval = FALSE}
-# Calculate similarity between all terms
-cluster_terms <- clusters %>%
-  imap(~ {
-    res <- .x$clusters %>%
-      filter(n_cell_types > 1) %>%
-      split(.$cluster) %>%
-      map(dplyr::select, Description, ID)
-
-    names(res) <- str_c(.y, "-", names(res))
-
-    res
-  }) %>%
-  flatten()
-
-term_sim <- cluster_terms %>%
-  imap_dfr(~ {
-    comp  <- .y
-    terms <- .x$ID
-
-    .x %>%
-      mutate(
-        sim = map(ID, ~ {
-          id <- .x
-
-          terms %>%
-            map_dfr(~ {
-              tibble(
-                comp  = comp,
-                term1 = id,
-                term2 = .x,
-                sim   = goSim(id, .x, go_sim_data)
-              )
-            })
-        })
-      ) %>%
-      unnest(sim) %>%
-      group_by(comp, Description, ID) %>%
-      summarize(
-        n_terms  = n(),
-        mean_sim = mean(sim),
-        med_sim  = median(sim),
-        .groups  = "drop"
-      ) %>%
-      arrange(desc(med_sim))
-  })
-
-# Calculate frequency of words for each GO cluster
-word_freq <- clusters %>%
-  imap_dfr(~ {
-    comp <- .y
-
-    .x$clusters %>%
-      split(.$cluster) %>%
-      imap_dfr(~ {
-        .x %>%
-          pull(ID) %>%
-          simplifyEnrichment::keyword_enrichment_from_GO() %>%
-          mutate(comparison = comp, cluster = .y)
-      })
-  })
-
-# Identify similar clusters between comparisons
-clst_matches <- cluster_sim %>%
-  filter(var1 != var2) %>%
-  group_by(var1) %>%
-  filter(
-    sim > 0.6,
-    sim == max(sim[sim < 1])
-  ) %>%
-  rowwise() %>%
-  mutate(matches = list(sort(as.character(c(var1, var2))))) %>%
-  pull(matches) %>%
-  unique()
-```
-
 ```{r "inflammatory examples"}
 plt_args <- list(
   go_in   = go[go_comps],
@@ -1868,17 +1795,18 @@ go_examples <- plt_args %>%
       go_in    = args$go_in@compareClusterResult,
       degs_in  = args$degs_in,
       clust_in = args$heat$terms,
-      genes    = args$genes
+      genes    = args$genes,
+      exclude_cell_types = exclude_cell_types
     )
     
     # Create plots
     create_go_gene_plots(
-      exp_data   = list("8hpi" = so_8, "24hpi" = so_merge),
-      deg_data   = list(
+      all_exp_data = list("8hpi" = so_8, "24hpi" = so_merge),
+      all_degs_data = list(
         "8hpi"  = degs$`so_8-up_lectype`,
         "24hpi" = degs$`so_merge-up_lectype`
       ),
-      gns                = gns,
+      genes              = gns,
       clrs               = args$clrs,
       type_clmn          = "lec_type",
       exclude_cell_types = exclude_cell_types,
@@ -1898,12 +1826,12 @@ degs_24_merged <- bind_rows(degs[c("so_merge-up_celltype2", "so_merge-down_cellt
 
 # Create plots
 other_examples <- create_go_gene_plots(
-  exp_data   = list("8hpi" = so_8, "24hpi" = so_merge),
-  deg_data   = list("8hpi" = degs_8_merged, "24hpi" = degs_24_merged),
-  gns        = genes_to_plot,
-  clrs       = "grey75",
-  type_clmn  = "cell_type_2",
-  cell_types = c("LEC", "BEC", "FRC")
+  all_exp_data  = list("8hpi" = so_8, "24hpi" = so_merge),
+  all_degs_data = list("8hpi" = degs_8_merged, "24hpi" = degs_24_merged),
+  genes         = genes_to_plot,
+  clrs          = "grey75",
+  type_clmn     = "cell_type_2",
+  cell_types    = c("LEC", "BEC", "FRC")
 ) +
   guides(linetype = guide_legend(
     title = "Differentially expressed", title.position = "top"
@@ -1966,7 +1894,7 @@ u_fig <- plot_grid(
 )
 ```
 
-Differentially expressed genes were identified for each cell type for mock (from 8 hpi experiment) vs 8 hpi and 8 hpi vs 24 hpi. Since the 8 hpi timepoint only has two biological replicates, the top two replicates from the 24 hpi timepoint with the most cells were used for the 8 vs 24 hpi comparison. Genes were considered upregulated if the log2 fold change was >0.15 for 8 hpi and >0.25 for 24 hpi for all replicates and the largest p-value for all replicates was <0.05.
+Differentially expressed genes were identified for each cell type for mock (from 8 hpi experiment) vs 8 hpi and 8 hpi vs 24 hpi. Since the 8 hpi timepoint only has two biological replicates, the top two replicates from the 24 hpi timepoint with the most cells were used for the 8 vs 24 hpi comparison. Genes were considered upregulated if the log2 fold change was >0.15 for 8 hpi and >0.25 for 24 hpi for all replicates and the largest p value for all replicates was <0.05.
 
 ```{r "DEG parameters"}
 as.data.frame(deg_args)
@@ -1974,13 +1902,13 @@ as.data.frame(deg_args)
 
 <br>
 
-Gene ontology terms (biological process) were identified for the top 200 upregulated genes (sorted by maximum p-value between replicates) for each cell type. Terms were filtered to only include those with an adjusted p-value <0.05 and at least 3 or 10 upregulated genes overlapping the term for the 8 hpi and 24 hpi timepoints, respectively. Terms identified for each cell type were combined and clustered into 5 modules based on the pairwise overlap between terms.
+Gene ontology terms (biological process) were identified for the top 200 upregulated genes (sorted by maximum p value between replicates) for each cell type. Terms were filtered to only include those with an adjusted p-value <0.05 and at least 3 or 10 upregulated genes overlapping the term for the 8 hpi and 24 hpi timepoints, respectively. Terms with <10 or >750 genes were excluded from the analysis. Terms identified for each cell type were combined and clustered into 5 modules based on the pairwise overlap between terms.
 
 A.  UMAP projection shows cells from the 8 hpi and 24 hpi timepoints, cells are colored by sample.
 B.  UMAP projection shows cells from the 8 hpi and 24 hpi timepoints, cells are colored by cell type.
 C.  The 8 hpi timeopoint shows upregulation of genes associated with an innate immune response. Enrichment scores are shown for each cell type for the primary gene ontology module identified for genes upregulated at the 8 hpi timepoint. Enrichment score is the fraction of upregulated genes overlapping the term divided by the fraction of background genes overlapping the term. GO terms that are significantly enriched are marked by a diamond.
 D.  A selection of top upregulated genes identified for the terms shown in A are plotted. Points show the median expression for the mock (m), 8 hpi (8h), and 24 hpi (24h) samples, grey bars show the interquartile range. A solid line indicates that the gene is significantly upregulated between the samples.
-E.  Enrichment scores are shown for the primary GO modules identified for the 24 hpi timepoint, as described in C.
+E.  Enrichment scores are shown for the top GO modules identified for the 24 hpi timepoint, as described in C.
 F.  A selection of top upregulated genes identified for the terms shown in E are plotted as described in D.
 G.  Expression of homeostatic cytokines is shown for BECs, FRCs (combination of FRCs and PvCs shown in A-F), and LECs as described in D. A solid line indicates that the gene is significantly up- or down-regulated between the samples.  
 
@@ -2075,6 +2003,82 @@ sim_heatmap
 
 
 
+```{r "GO CLUSTER TERM SIMILARITY", eval = FALSE}
+# Calculate similarity between all terms
+cluster_terms <- clusters %>%
+  imap(~ {
+    res <- .x$clusters %>%
+      filter(n_cell_types > 1) %>%
+      split(.$cluster) %>%
+      map(dplyr::select, Description, ID)
+
+    names(res) <- str_c(.y, "-", names(res))
+
+    res
+  }) %>%
+  flatten()
+
+term_sim <- cluster_terms %>%
+  imap_dfr(~ {
+    comp  <- .y
+    terms <- .x$ID
+
+    .x %>%
+      mutate(
+        sim = map(ID, ~ {
+          id <- .x
+
+          terms %>%
+            map_dfr(~ {
+              tibble(
+                comp  = comp,
+                term1 = id,
+                term2 = .x,
+                sim   = goSim(id, .x, go_sim_data)
+              )
+            })
+        })
+      ) %>%
+      unnest(sim) %>%
+      group_by(comp, Description, ID) %>%
+      summarize(
+        n_terms  = n(),
+        mean_sim = mean(sim),
+        med_sim  = median(sim),
+        .groups  = "drop"
+      ) %>%
+      arrange(desc(med_sim))
+  })
+
+# Calculate frequency of words for each GO cluster
+word_freq <- clusters %>%
+  imap_dfr(~ {
+    comp <- .y
+
+    .x$clusters %>%
+      split(.$cluster) %>%
+      imap_dfr(~ {
+        .x %>%
+          pull(ID) %>%
+          simplifyEnrichment::keyword_enrichment_from_GO() %>%
+          mutate(comparison = comp, cluster = .y)
+      })
+  })
+
+# Identify similar clusters between comparisons
+clst_matches <- cluster_sim %>%
+  filter(var1 != var2) %>%
+  group_by(var1) %>%
+  filter(
+    sim > 0.6,
+    sim == max(sim[sim < 1])
+  ) %>%
+  rowwise() %>%
+  mutate(matches = list(sort(as.character(c(var1, var2))))) %>%
+  pull(matches) %>%
+  unique()
+```
+
 ```{r "GO CLUSTER GENE OVERLAP", eval = FALSE}
 # Pull upregulated genes for each GO cluster for each timepoint
 clst_terms <- clusters %>%
@@ -2125,4 +2129,3 @@ cluster_overlap %>%
   geom_tile() +
   base_theme
 ```
-
