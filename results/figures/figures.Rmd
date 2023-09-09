@@ -51,8 +51,8 @@ in the draining lymph node at 8 hpi
 
 A.  UMAP projection shows the relative viral burden for the 8 hpi timepoint. CHIKV score was calculated using the CHIKV-capture libraries. For each cell the number of counts aligning to the CHIKV genome was divided by the total counts (mouse + CHIKV counts) for the cell. A pseudo count (smallest non-zero value / 2) was added to each value plotted.
 B.  UMAP projection shows CHIKV+ cells (CHIKV score >0) for the 8 hpi timepoint. Cell types with <=3 CHIKV+ cells are labeled as "other".
-C.  CHIKV scores (as described in A) are shown for CHIKV+ cell types with >40 total cells and >3 CHIKV+ cells for the 8 hpi sample. P values were calculated using a one-sided Wilcoxon rank sum test with Bonferroni correction to determine whether CHIKV scores for each cell type were elevated when compared with all other CHIKV+ cells. Only adjusted p values <0.05 are shown. For each boxplot, the central lines, box limits, and whiskers represent medians, the interquartile range (IQR), and min/max values that are not outliers, respectively. Outliers are shown as points and include any values that are more than 1.5× IQR away from the box.
-D.  The fraction of cells identified as CHIKV+ is shown for each cell type in C. Labels show the number of CHIKV+ cells/total cells. P values were calculated using a one-sided hypergeometric test with Bonferroni correction to determine whether the frequency of CHIKV+ cells is greater than expected for each cell type. Only adjusted p values <0.05 are shown.
+C.  CHIKV scores (as described in A) are shown for CHIKV+ cell types with >40 total cells and >3 CHIKV+ cells for the 8 hpi sample. P values were calculated using a one-sided Wilcoxon rank sum test with Bonferroni correction to assess whether CHIKV scores for each cell type were elevated when compared with all other CHIKV+ cells. Only adjusted p values <0.05 are shown. For each boxplot, the central lines, box limits, and whiskers represent medians, the interquartile range (IQR), and min/max values that are not outliers, respectively. Outliers are shown as points and include any values that are more than 1.5× IQR away from the box.
+D.  The fraction of cells identified as CHIKV+ is shown for each cell type in C. Labels show the number of CHIKV+ cells/total cells. P values were calculated using a one-sided hypergeometric test with Bonferroni correction to assess whether the frequency of CHIKV+ cells was greater than expected for each cell type. Only adjusted p values <0.05 are shown.
 E.  MARCO expression is shown for fLECs for mock-infected cells and CHIKV-infected cells classified as either CHIKV- or CHIKV+. P values were calculated using a two-sided Wilcoxon rank-sum test with Bonferroni correction. Boxplots were drawn as described in C.
 F.  Madcam1 expression is shown for fLECs as described in E.
 
@@ -434,7 +434,7 @@ plot_grid(
 
 ### Marco/Mxra8 expression
 
-Mxra8 expression is shown for CHIKV+/- cells for the 8 hpi timepoint. Mxra8 expression appears to be higher in CHIKV+ FRCs and BECs, suggesting a distinct mechanism of CHIKV entry. This is a result we have discussed previously, and could be included in a supplemental figure.
+Mxra8 expression is shown for CHIKV+/- cells for the 8 hpi timepoint. Mxra8 expression appears higher in CHIKV+ FRCs and BECs, suggesting a distinct mechanism of CHIKV entry. This is a result we discussed previously and could be included in a supplemental figure.
 
 ```{r, fig.width = 12, fig.height = 5}
 mxra8_bxs <- lec_type_cols[c("Marco_LEC", "FRC", "BEC")] %>%
@@ -860,7 +860,7 @@ bx_comps %>%
 CHIKV may target MARCO-expressing LECs for infection
 
 A.  UMAP projection shows annotated cell types for the 24 hpi timepoint.
-B.  UMAP projection shows CHIKV sgRNA ratio (sgRNA counts / 5' counts) for the 24 hpi timepoint. A pseudo count of 1 was added to the sgRNA and 5' counts to eliminate division by zero.
+B.  UMAP projection shows CHIKV sgRNA ratio (sgRNA counts / 5' counts) for the 24 hpi timepoint. A pseudo count of 1 was added to the sgRNA and 5' counts.
 C.  The fraction of cells identified as CHIKV-high is shown for each biological replicate for cell types with >40 total cells and >3 CHIKV-high cells for the 24 hpi timepoint. Labels show the number of CHIKV-high cells/total cells. P values were calculated using a one-sided hypergeometric test as described in figure 1D.
 D.  CHIKV sgRNA ratio is shown for cells with >0 sgRNA counts, >0 5' counts, and >40 total cells. P values were calculated using a two-sided Wilcoxon rank sum test with Bonferroni correction. For each violin plot, the central point and flanking lines represent medians and the interquartile range (IQR), respectively.
 E.  The correlation between CHIKV sgRNA ratio and QC metrics is shown for CHIKV-high cells for Marco LECs and unassigned LECs.
@@ -1619,7 +1619,7 @@ go_sim_data <- godata(
 
 # Comparisons to use for GO analysis and plotting
 # only want to use two main comparisons for figures
-go_comps  <- grep("^so_(8|24|merge)(_chikv|)-(up|down)_lectype$", names(degs), value = TRUE)
+go_comps  <- grep("^so_(8|24|merge)-up_lectype$", names(degs), value = TRUE)
 plt_comps <- grep("^so_(8|merge)-up_lectype$", names(degs), value = TRUE)
 
 # Get GO terms
@@ -1920,9 +1920,9 @@ Gene ontology terms (biological process) were identified for the top 200 upregul
 
 A.  UMAP projection shows cells from the 8 hpi and 24 hpi timepoints, cells are colored by sample.
 B.  UMAP projection shows cells from the 8 hpi and 24 hpi timepoints, cells are colored by cell type.
-C.  Enrichment scores are shown for each cell type for the primary gene ontology module identified for genes upregulated at the 8 hpi timepoint. The top five terms, sorted by number of cell types showing significant enrichment for the term, are shown. Enrichment scores were calculated as the fraction of upregulated genes overlapping the term divided by the fraction of background genes overlapping the term. GO terms that are significantly enriched are marked by a diamond.
-D.  A selection of top upregulated genes identified for the terms shown in A are plotted. Points show the median expression for the mock (m), 8 hpi (8h), and 24 hpi (24h) samples, grey bars show the interquartile range. A solid line indicates that the gene is significantly upregulated between the samples.
-E.  Enrichment scores are shown for the top GO modules identified for the 24 hpi timepoint, as described in C.
+C.  Enrichment scores are shown for each cell type for the primary gene ontology module identified for genes upregulated at the 8 hpi timepoint. The top five terms, sorted by number of cell types showing significant enrichment for the term, are shown. Enrichment scores were calculated as the fraction of upregulated genes overlapping the term divided by the fraction of background genes overlapping the term. Cell types are only shown if they have at least one upregulated gene overlapping any of the terms.
+D.  A selection of top upregulated genes identified for the terms from A are shown. Points show the median expression for the mock (m), 8 hpi (8h), and 24 hpi (24h) samples, grey bars show the interquartile range. A solid line indicates that the gene is significantly upregulated between the samples.
+E.  Enrichment scores are shown for the top two GO modules identified for the 24 hpi timepoint, as described in C.
 F.  A selection of top upregulated genes identified for the terms shown in E are plotted as described in D.
 G.  Expression of homeostatic cytokines is shown for BECs, FRCs (combination of FRCs and PvCs shown in A-F), and LECs as described in D. A solid line indicates that the gene is significantly up- or down-regulated between the samples.  
 
@@ -1963,9 +1963,9 @@ plot_grid(
 
 ### Extended GO analysis {.tabset .tabset-pills}
 
-A.  Dendrogram showing gene ontology modules. GO terms were identified for each cell type and filtered as described for Fig 5. Terms were clustered into 5 modules based on the pairwise overlap between terms.
+A.  Dendrogram showing gene ontology modules. GO terms were identified for each cell type and filtered as described in Fig 5. Terms were clustered into 5 modules based on the pairwise overlap between terms.
 B.  Enrichment scores are shown for each GO module identified for each timepoint, as described in Fig 5.
-C.  Top upregulated genes are shown for each GO module as described in Fig 5. Genes were sorted to 
+C.  Top upregulated genes are shown for each GO module as described in Fig 5.
 
 ```{r "expanded GO figures", fig.width = 16, fig.height = 19, results = "asis"}
 plt_args <- list(
