@@ -27,7 +27,7 @@ params:
   lec_res:      11.5                      # Clustering resolution for annotating LECs
   lec_n_genes:  1500                      # Number of variable genes for annotating LECs
 editor_options: 
-  chunk_output_type: console
+  chunk_output_type: inline
 ---
 
 <br>
@@ -436,10 +436,11 @@ plot_grid(
 
 Mxra8 expression is shown for CHIKV+/- cells for the 8 hpi timepoint. Mxra8 expression appears higher in CHIKV+ FRCs and BECs, suggesting a distinct mechanism of CHIKV entry. This is a result we discussed previously and could be included in a supplemental figure.
 
-```{r, fig.width = 12, fig.height = 5}
+```{r, fig.width = 17, fig.height = 5}
 mxra8_bxs <- lec_type_cols[c("Marco_LEC", "FRC", "BEC")] %>%
   imap(~ {
     plt_dat %>%
+      # subset(rep == "1") %>%
       create_gene_boxplot(
         GENE = "Mxra8", TYPE = .y,
         clr = .x, lvls = plt_lvls, p_size = txt_pt1
@@ -451,7 +452,7 @@ plot_grid(plotlist = mxra8_bxs, nrow = 1)
 
 Marco and Mxra8 expression is shown for CHIKV-high/low cells for the 24 hpi timepoint. Using the updated cell type annotations, we still observe increased Marco expression for CHIKV-high Marco LECs. There is no difference in Mxra8 expression for CHIKV-high FRCs and BECs at 24 hpi.
 
-```{r, fig.width = 12, fig.height = 5}
+```{r, fig.width = 17, fig.height = 5}
 plts <- lec_type_cols[c("FRC", "BEC")] %>%
   imap(~ {
     so_24 %>%
@@ -479,19 +480,26 @@ The CHIKV score shown in figure 1A and C is calculated by dividing CHIKV counts 
 
 There is a strong correlation between mouse counts from the capture libraries and original libraries, this validates the use of mouse counts from the capture libraries as a normalization factor.
 
-```{r, fig.width = 6, fig.height = 6}
+```{r, fig.width = 15, fig.height = 6}
 cnt_dat <- plt_dat@meta.data %>%
-  mutate(treatment = fct_relevel(treatment, treats))
+  mutate(
+    nCount_RNA_CHIKV     = nCount_RNA + nCount_CHIKV,
+    enr_nCount_RNA_CHIKV = enr_nCount_RNA + enr_nCount_CHIKV,
+    treatment            = fct_relevel(treatment, treats)
+  )
 
 axis_labs <- c(
-  nCount_RNA     = "Mouse counts",
-  enr_nCount_RNA = "Mouse counts\nCHIKV-enriched libraries"
+  nCount_RNA_CHIKV     = "Total counts",
+  enr_nCount_RNA_CHIKV = "Total counts\nCHIKV-enriched libraries"
 )
 
 lab_dat <- cnt_dat %>%
   group_by(rep, treatment) %>%
   summarize(
+    r = cor(nCount_RNA_CHIKV, enr_nCount_RNA_CHIKV, method = "pearson"),
+    r = str_c("r = ", round(r, 3)),
     n = str_c("n = ", label_comma()(n())),
+    n = str_c(n, "\n", r),
     .groups = "drop"
   )
 
