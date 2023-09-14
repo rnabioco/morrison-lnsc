@@ -101,11 +101,14 @@ chikv_score_umap <- fig1_dat %>%
   guides(fill = guide_colorbar(
     title.position = "top", ticks = FALSE, title = score_clmn
   )) +
+  
+  ggtitle("CHIKV score") +
   umap_theme +
   theme(
+    plot.title           = element_text(size = ttl_pt2 * 1.5, hjust = 0.2),
+    legend.title         = element_blank(),
     aspect.ratio         = 0.9,
     legend.position      = "top",
-    legend.title         = element_text(hjust = 0.5, size = ttl_pt2 * 1.5),
     legend.text          = element_text(angle = 45, hjust = 1), 
     legend.direction     = "horizontal",
     legend.justification = 0.2,
@@ -415,6 +418,13 @@ top <- plot_grid(
   axis   = "tb"
 )
 
+top <- wrap_plots(
+  chikv_score_umap, plot_spacer(), chikv_typs_umap,
+  widths = c(1, 0.1, 1)
+) +
+  plot_annotation(tag_levels = "A") &
+  theme(plot.tag = element_text(size = ttl_pt2 * 1.5, face = "bold"))
+
 bot <- plot_grid(
   count_bxs, NULL, marco_bxs, NULL, madcam_bxs, NULL,
   labels = c("", "", "E", "", "F"),
@@ -552,7 +562,7 @@ type_umap <- figS2_dat %>%
     plot_colors  = lec_type_cols,
     plot_lvls    = c("FRC", "unassigned-LEC", "Marco_LEC", "fLEC"),
     size         = 0.2,
-    label_params = list(size = txt_pt2)
+    label_params = list(size = ttl_pt2)
   ) +
   geom_circle(
     aes(x0 = x, y0 = y, r = 2, x = NULL, y = NULL),
@@ -678,23 +688,26 @@ scatter <- plt_dat %>%
       scale_y_continuous(trans = y_trans, expand = expansion(c(0.05, 0.10))) +
       guides(color = guide_legend(override.aes = list(size = 4))) +
       labs(x = names(x_var), y = .y) +
-      theme(aspect.ratio = 0.9) +
       base_theme +
       theme(
-        aspect.ratio = 0.9,
-        legend.position = "bottom",
-        legend.title = element_blank(),
-        axis.text.x = element_text(size = txt_pt1),
-        axis.text.y = element_text(size = txt_pt1)
+        aspect.ratio    = 0.9,
+        legend.position = "right",
+        legend.title    = element_blank(),
+        legend.text     = element_text(size = ttl_pt2),
+        legend.key.height = unit(50, "pt"),
+        axis.text.x     = element_text(size = txt_pt1),
+        axis.text.y     = element_text(size = txt_pt1)
       )
   })
 
 # Create final figure
 scatter <- scatter %>%
-  wrap_plots(byrow = FALSE, nrow = 1)
+  wrap_plots(
+    byrow = FALSE, ncol = 1, guides = "collect"
+  )
 ```
 
-```{r "fracion CHIKV-high"}
+```{r "fraction CHIKV-high"}
 # Fraction CHIKV-high cells
 frac_dat <- figS2_dat %>%
   filter(treatment == treats[2]) %>%
@@ -756,7 +769,7 @@ frac_24 <- frac_dat %>%
     aes(label = p_lab),
     data = filter(p_dat, p_adj < 0.05),
     color = "black", vjust = -1, hjust = 0.4,
-    size = 8 / .pt,
+    size = 10 / .pt,
     parse = TRUE
   ) +
   
@@ -767,8 +780,8 @@ frac_24 <- frac_dat %>%
   labs(y = "Fraction\nCHIKV-high cells") +
   base_theme +
   theme(
-    axis.text.y     = element_text(size = txt_pt1),
-    axis.text.x     = element_text(size = txt_pt2, angle = 45, hjust = 1),
+    axis.text.y     = element_text(size = txt_pt1, color = "black"),
+    axis.text.x     = element_text(size = txt_pt2, angle = 45, hjust = 1, color = "black"),
     axis.title.x    = element_blank(),
     legend.position = "none",
     aspect.ratio    = 0.25,
@@ -811,15 +824,15 @@ sgRNA_boxes <- bx_dat %>%
     draw_quantiles = c(0.25, 0.75)
   ) +
   scale_y_continuous(trans = "log10", expand = expansion(c(0.05, 0.15))) +
-  labs(y = "CHIKV sgRNA\nratio") +
+  labs(y = "CHIKV\nsgRNA ratio") +
   base_theme +
   theme(
     aspect.ratio    = 0.32,
     plot.margin     = margin(5, 5, 0, 15),
     legend.position = "none",
     axis.title.x    = element_blank(),
-    axis.text.x     = element_text(size = txt_pt2, angle = 45, hjust = 1),
-    axis.text.y     = element_text(size = txt_pt1),
+    axis.text.x     = element_text(size = txt_pt2, angle = 45, hjust = 1, color = "black"),
+    axis.text.y     = element_text(size = txt_pt1, color = "black"),
   )
 
 # Calculate p-values
@@ -859,7 +872,7 @@ bx_comps %>%
         y        = 500,
         p_y      = 1500,
         p_val    = p,
-        size     = 8 / .pt,
+        size     = 10 / .pt,
         line_col = "grey75"
       )
   })
@@ -874,12 +887,12 @@ D.  CHIKV sgRNA ratio is shown for cells with >0 sgRNA counts, >0 5' counts, and
 E.  The correlation between CHIKV sgRNA ratio and QC metrics is shown for CHIKV-high cells for Marco LECs and unassigned LECs.
 
 ```{r "fig S2", fig.width = 16, fig.height = 14}
-top <- plot_grid(
+top <- wrap_plots(
   type_umap, sgRNA_umap,
-  labels = c("A", "B"), label_size = ttl_pt2 * 1.5,
-  align = "vh", axis = "trbl",
   nrow = 1
-)
+) +
+  plot_annotation(tag_levels = "A") &
+  theme(plot.tag = element_text(size = ttl_pt2 * 1.5, face = "bold"))
 
 left <- plot_grid(
   frac_24, sgRNA_boxes,
@@ -888,21 +901,16 @@ left <- plot_grid(
   ncol = 1
 )
 
-right <- plot_grid(
-  NULL, scatter, NULL,
-  rel_heights = c(0.15, 1, 0.15),
-  ncol = 1
-)
-
 bot <- plot_grid(
-  left, right,
+  left, scatter,
   labels = c("", "E"), label_size = ttl_pt2 * 1.5,
+  rel_widths = c(1, 0.75),
   nrow = 1
 )
 
 plot_grid(
   top, bot,
-  rel_heights = c(1, 0.75),
+  rel_heights = c(1, 0.85),
   ncol = 1
 )
 ```
@@ -940,7 +948,10 @@ type_umaps <- plt_args %>%
       size       = 0.001,
       ttl        = args$ttl
     ) +
-      theme(legend.position = "bottom")
+      theme(
+        legend.position = "bottom",
+        legend.text     = element_text(size = txt_pt2)
+      )
   })
 
 # Create final figure
@@ -1144,7 +1155,7 @@ type_boxes <- gns %>%
         aspect.ratio    = 0.15,
         legend.position = "top",
         legend.title    = element_blank(),
-        legend.text     = element_text(size = txt_pt1),
+        legend.text     = element_text(size = ttl_pt1),
         axis.title.x    = element_blank(),
         axis.text.x     = element_text(size = txt_pt2, angle = 90, hjust = 1, vjust = 0.5),
         axis.text.y     = element_text(size = txt_pt1 * 0.75),
@@ -1159,53 +1170,11 @@ type_boxes <- gns %>%
   )
 ```
 
-### V1
-
 ```{r "fig S3", fig.width = 12, fig.height = 20}
 plot_grid(
   type_fig, NULL, heats_fig, NULL, type_boxes,
   rel_heights = c(0.7, 0.04, 0.4, 0.04, 1.2),
   labels      = c("", "", "", "", "D"),
-  label_size  = ttl_pt2 * 1.5,
-  ncol        = 1
-)
-```
-
----
-
-<br>
-
-<br>
-
-### V2
-
-This is an alternate version of Figure S3 that includes plots showing Mxra8 expression for CHIKV+ FRCs and BECs for the 8 hpi timepoint.
-
-```{r "fig S3 v2", fig.width = 12, fig.height = 20}
-# Add Mxra8 plots to figure
-d <- mxra8_bxs[c("FRC", "BEC")] %>%
-  map(~ {
-    .x +
-      theme(
-        axis.title.y = element_text(size = txt_pt2),
-        axis.text.x  = element_text(size = txt_pt1),
-        axis.text.y  = element_text(size = txt_pt1),
-        plot.title   = element_text(size = ttl_pt2)
-      )
-  }) %>%
-  plot_grid(plotlist = .)
-
-heats_fig_v2 <- plot_grid(
-  type_heats_v2, d,
-  labels     = c("C", "D"),
-  label_size = ttl_pt2 * 1.5,
-  nrow       = 1
-)
-
-plot_grid(
-  type_fig, NULL, heats_fig_v2, NULL, type_boxes,
-  rel_heights = c(0.7, 0.04, 0.4, 0.04, 1.2),
-  labels      = c("", "", "", "", "E"),
   label_size  = ttl_pt2 * 1.5,
   ncol        = 1
 )
@@ -1766,7 +1735,7 @@ ttls <- as_labeller(c(
 # Cluster colors
 go_clrs <- setNames(
   list(
-    c(`1` = "#E69F00", `2` = "#56B4E9"),
+    c(`1` = "#E69F00"),
     c(`1` = "#D7301F", `2` = "#6A51A3")
   ),
   plt_comps
@@ -1839,7 +1808,8 @@ go_examples <- plt_args %>%
       clrs               = args$clrs,
       type_clmn          = "lec_type",
       exclude_cell_types = exclude_cell_types,
-      only_show_upreg    = TRUE
+      only_show_upreg    = TRUE,
+      ttl                = "Upregulated"
     )
   })
 ```
@@ -1862,9 +1832,6 @@ other_examples <- create_go_gene_plots(
   type_clmn     = "cell_type_2",
   cell_types    = c("LEC", "BEC", "FRC")
 ) +
-  guides(linetype = guide_legend(
-    title = "Differentially expressed", title.position = "top"
-  )) +
   theme(plot.margin = margin(20, 0, 0, 0))
 
 other_examples <- plot_grid(
@@ -1902,8 +1869,10 @@ fig5_umaps <- plt_args %>%
     y          = "UMAP_2",
     size       = 0.05,
     facet_plot = NULL,
-    n_lab      = TRUE
-  )
+    n_lab      = TRUE,
+    key_height = 35
+  ) %>%
+  map(~ .x + theme(plot.margin = margin(5, 5, 5, 30)))
 
 # Create final figure
 u_fig <- plot_grid(
@@ -1963,7 +1932,7 @@ plot_grid(
   plt_panels[[1]], plt_panels[[2]],
   other_examples,
   ncol = 1,
-  rel_heights = c(0.8, 0.64, 1, 0.8)
+  rel_heights = c(0.8, 0.64, 1, 0.65)
 )
 ```
 

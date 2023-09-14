@@ -297,16 +297,15 @@ create_example_gene_fig <- function(df_in, gns, x_clmn, clrs = lec_type_cols,
             override.aes = list(shape = 15, fill = "black", size = 4)
           )
         ) +
-        # base_theme +
         djvdj_theme() +
         theme(
           aspect.ratio    = 0.15,
           plot.title      = element_text(hjust = 0.5),
           legend.position = "top",
           legend.title    = element_blank(),
-          # legend.text     = element_text(size = txt_pt1),
           axis.title.x    = element_blank(),
           axis.text.x     = element_text(angle = 45, hjust = 1),
+          # legend.text     = element_text(size = txt_pt1),
           # axis.text.y     = element_text(size = txt_pt1 * 0.75),
           # strip.text      = element_text(size = txt_pt2)
         )
@@ -496,7 +495,8 @@ create_example_gene_fig2 <- function(df_in, gns, x_clmn, al_clmn,
 
 create_type_umaps <- function(so_in, data_col, x = "hUMAP_1", y = "hUMAP_2",
                               clrs = type_cols, ttl = NULL, n_lab = TRUE,
-                              facet_plot = c("tm", "treatment"), ...) {
+                              facet_plot = c("tm", "treatment"),
+                              lab_size = txt_pt2, key_height = 30, ...) {
   res <- so_in %>%
     mutate_meta(~ {
       dat <- .x
@@ -541,7 +541,8 @@ create_type_umaps <- function(so_in, data_col, x = "hUMAP_1", y = "hUMAP_2",
       panel.background  = element_blank(),
       plot.title        = element_text(face = "plain", hjust = 0.5),
       legend.position   = "right",
-      legend.key.height = unit(30, "pt")
+      legend.key.height = unit(key_height, "pt"),
+      legend.text       = element_text(size = lab_size)
     )
   
   if (n_lab) {
@@ -549,7 +550,8 @@ create_type_umaps <- function(so_in, data_col, x = "hUMAP_1", y = "hUMAP_2",
       geom_text(
         aes(Inf, Inf, label = n_lab),
         hjust = 1.1, vjust = 1.2, color = "black",
-        check_overlap = TRUE
+        check_overlap = TRUE,
+        size = lab_size / .pt
       )
   }
   
@@ -1056,6 +1058,9 @@ create_go_heatmap <- function(df_in, go_in, n_clusters = 2, n_terms = 5,
     )
   
   # Create heatmap
+  if (length(clrs) == 1) scale_clr <- clrs
+  else                   scale_clr <- "black"
+  
   res <- dat %>%
     ggplot(aes(Cluster, Description, fill = as.character(cluster), alpha = enrichment)) +
     geom_tile() +
@@ -1067,9 +1072,10 @@ create_go_heatmap <- function(df_in, go_in, n_clusters = 2, n_terms = 5,
       size   = 2,
       stroke = 0.75
     ) +
-    scale_alpha_continuous(range = c(0, 1), n.breaks = 4) +
+    scale_alpha_continuous(range = c(0, 1), breaks = seq(0, 1000, 15)) +
     scale_color_manual(values = "black") +
     scale_fill_manual(values = clrs) +
+    scale_x_discrete(labels = ~ str_replace(.x, "_", " ")) +
     guides(
       alpha = guide_legend(
         keyheight      = unit(7, "pt"),
@@ -1077,23 +1083,26 @@ create_go_heatmap <- function(df_in, go_in, n_clusters = 2, n_terms = 5,
         order          = 1,
         title          = "Enrichment Score",
         title.position = "top",
-        nrow           = 1
+        nrow           = 1,
+        override.aes   = list(fill = scale_clr)
       ),
       color = guide_legend(
         title          = NULL,
         label.position = "top",
-        label.theme    = element_text(size = 12),
+        label.theme    = element_text(size = ttl_pt2),
+        label.vjust    = 0.45,
         override.aes   = list(size = 3, stroke = 1),
       ),
       fill = "none"
     ) +
-    djvdj_theme() +
+    base_theme +
     theme(
-      legend.position = "bottom",
-      legend.title    = element_text(size = 12),
-      axis.title      = element_blank(),
-      axis.text.x     = element_text(angle = 45, hjust = 1),
-      strip.clip      = "off"
+      legend.position    = "bottom",
+      legend.title.align = 0.5,
+      legend.key.width   = unit(25, "pt"),
+      axis.title         = element_blank(),
+      axis.text.x        = element_text(angle = 45, hjust = 1),
+      strip.clip         = "off"
     )
   
   if (free_y) {
@@ -1224,7 +1233,19 @@ create_go_gene_plots <- function(all_exp_data = list("8hpi" = so_8, "24hpi" = so
                                  clrs = c(`1` = "orange"), cell_types = 10,
                                  lvls = c("mock", "8hpi", "24hpi"), n_cells = 10,
                                  type_clmn = "lec_type", only_show_upreg = TRUE,
-                                 exclude_cell_types = NULL) {
+                                 exclude_cell_types = NULL,
+                                 ttl = "Differentially expressed",
+                                 cell_type_lvls = c(
+                                   "LEC", "cLEC", "Collecting", "fLEC", "tzLEC",
+                                   "Valve", "Marco_LEC", "BEC", "FRC",
+                                   "PvC"
+                                  )
+                                 # cell_type_lvls = c(
+                                 #   "LEC", "cLEC", "Collecting", "fLEC",
+                                 #   "Marco_LEC", "tzLEC", "Valve", "BEC", "FRC",
+                                 #   "PvC"
+                                 #  )
+                                 ) {
   
   # Genes to plot
   gns <- names(genes) %||% genes
@@ -1342,9 +1363,10 @@ create_go_gene_plots <- function(all_exp_data = list("8hpi" = so_8, "24hpi" = so
     dplyr::rename(y_end = value) %>%
     
     mutate(
-      Upregulated = as.character(!is.na(max_pval)),
-      Upregulated = fct_relevel(Upregulated, c("TRUE", "FALSE")),
-      name        = fct_relevel(name, gns)
+      Upregulated       = as.character(!is.na(max_pval)),
+      Upregulated       = fct_relevel(Upregulated, c("TRUE", "FALSE")),
+      name              = fct_relevel(name, gns),
+      !!sym(type_clmn) := fct_relevel(!!sym(type_clmn), cell_type_lvls)
     )
   
   # Only show cell types with at least one gene upregulated for any timepoint
@@ -1360,11 +1382,12 @@ create_go_gene_plots <- function(all_exp_data = list("8hpi" = so_8, "24hpi" = so
   
   res <- plt_dat %>%
     filter(!!sym(type_clmn) %in% unique(pull(ln_dat, type_clmn))) %>%
+    mutate(!!sym(type_clmn) := fct_relevel(!!sym(type_clmn), cell_type_lvls)) %>%
     ggplot(aes(treatment, value, color = cluster)) +
     
     geom_errorbar(
       aes(x = treatment, ymin = q1, ymax = q3),
-      color = "grey90",
+      color = "grey80",
       width = 0,
       linewidth = 1.5
     ) +
@@ -1377,29 +1400,39 @@ create_go_gene_plots <- function(all_exp_data = list("8hpi" = so_8, "24hpi" = so
       linewidth = 0.75,
       data  = ln_dat
     ) +
-    facet_grid(as.formula(str_c("name ~ ", type_clmn)), switch = "y", scales = "free_y") +
+    facet_grid(
+      as.formula(str_c("name ~ ", type_clmn)),
+      switch = "y", scales = "free_y",
+      labeller = as_labeller(~ str_replace(.x, "_", " "))
+    ) +
     
     scale_linetype_manual(values = c("TRUE" = 1, "FALSE" = 3)) +
     scale_color_manual(values = clrs) +
     scale_y_continuous(
-      breaks = (function(x) return(c(0, floor(max(x))))),
-      limits = (function(x) c(x[1], ifelse(x[2] < 1, 1, x[2]))),  # set 1 as lowest upper limit
+      breaks = ~ c(0, floor(max(.x))),
+      limits = ~ c(.x[1], ifelse(.x[2] < 1, 1, .x[2])),  # set 1 as lowest upper limit
       expand = expansion(c(0.2, 0.05))
     ) +
-    scale_x_discrete(labels = c(mock = "m", `8hpi` = "8h", `24hpi` = "24h")) +
+    scale_x_discrete(labels = c(mock = "m", `8hpi` = "8", `24hpi` = "24")) +
     guides(
       color = "none",
-      linetype = guide_legend(title.position = "top")
+      linetype = guide_legend(
+        title = ttl, title.position = "top",
+        override.aes = list(linewidth = 1.5)
+      )
     ) +
     
-    djvdj_theme() +
+    base_theme +
     theme(
-      aspect.ratio    = aspect,
-      legend.position = "bottom",
-      legend.title    = element_text(size = 12),
-      strip.clip      = "off",
-      strip.placement = "outside",
-      axis.title      = element_blank()
+      aspect.ratio       = aspect,
+      legend.position    = "bottom",
+      legend.key.width   = unit(25, "pt"),
+      legend.title.align = 0.5,
+      legend.text        = element_text(size = ttl_pt1),
+      strip.placement    = "outside",
+      strip.clip         = "off",
+      strip.text         = element_text(size = ttl_pt1),
+      axis.title         = element_blank()
     )
   
   res
@@ -2321,10 +2354,11 @@ cir_size <- 3.5
 sqr_size <- 4
 
 txt_theme_1 <- theme(
-  strip.text  = element_text(size = ttl_pt2),
-  legend.text = element_text(size = txt_pt2),
-  axis.title  = element_text(size = ttl_pt2),
-  axis.text   = element_text(size = txt_pt2)
+  strip.text   = element_text(size = ttl_pt2),
+  legend.text  = element_text(size = txt_pt2),
+  axis.title   = element_text(size = ttl_pt2),
+  axis.text    = element_text(size = txt_pt2, color = "black"),
+  legend.title = element_text(size = ttl_pt2),
 )
 
 line_theme <- theme(
