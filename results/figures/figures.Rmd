@@ -107,7 +107,6 @@ chikv_score_umap <- fig1_dat %>%
   theme(
     plot.title           = element_text(size = ttl_pt2 * 1.5, hjust = 0.2),
     legend.title         = element_blank(),
-    aspect.ratio         = 0.9,
     legend.position      = "top",
     legend.text          = element_text(angle = 45, hjust = 1), 
     legend.direction     = "horizontal",
@@ -158,7 +157,6 @@ chikv_typs_umap <- so_8@meta.data %>%
   labs(title = "CHIKV+ cell types") +
   umap_theme +
   theme(
-    aspect.ratio         = 0.9,
     plot.title           = element_text(size = ttl_pt2 * 1.5, hjust = 0.2),
     legend.title         = element_blank(),
     legend.key.height    = unit(35, "pt"),
@@ -572,10 +570,12 @@ type_umap <- figS2_dat %>%
     linetype  = 2,
     linewidth = 0.75
   ) +
+  guides(color = guide_legend(nrow = 5, override.aes = list(size = 4))) +
   umap_theme +
   theme(
-    aspect.ratio = 0.9,
-    legend.title = element_blank(), legend.key.height = unit(30, "pt")
+    legend.title = element_blank(),
+    legend.position = "top"
+    # legend.key.height = unit(30, "pt")
   )
   
 # sgRNA ratio UMAP
@@ -886,7 +886,7 @@ C.  The fraction of cells identified as CHIKV-high is shown for each biological 
 D.  CHIKV sgRNA ratio is shown for cells with >0 sgRNA counts, >0 5' counts, and >40 total cells. P values were calculated using a two-sided Wilcoxon rank sum test with Bonferroni correction. For each violin plot, the central point and flanking lines represent medians and the interquartile range (IQR), respectively.
 E.  The correlation between CHIKV sgRNA ratio and QC metrics is shown for CHIKV-high cells for Marco LECs and unassigned LECs.
 
-```{r "fig S2", fig.width = 16, fig.height = 14}
+```{r "fig S2", fig.width = 13, fig.height = 13.7}
 top <- wrap_plots(
   type_umap, sgRNA_umap,
   nrow = 1
@@ -910,7 +910,7 @@ bot <- plot_grid(
 
 plot_grid(
   top, bot,
-  rel_heights = c(1, 0.85),
+  rel_heights = c(1, 0.8),
   ncol = 1
 )
 ```
@@ -921,7 +921,7 @@ plot_grid(
 
 <br>
 
-## Figure S3 {.tabset .tabset-pills}
+## Figure S3
 
 A.  UMAP projection shows cell type annotations for integrated data.
 B.  UMAP projection shows endothelial cell type annotations for integrated endothelial cell data.
@@ -948,6 +948,7 @@ type_umaps <- plt_args %>%
       size       = 0.001,
       ttl        = args$ttl
     ) +
+      guides(color = guide_legend(nrow = 3, override.aes = list(size = 4))) +
       theme(
         legend.position = "bottom",
         legend.text     = element_text(size = txt_pt2)
@@ -1004,14 +1005,13 @@ lec_labs <- h_dat %>%
   get_nlab_fun("lec_type", l = "\n", r = "")
   
 # Create heatmaps
-heat_args <- list(
-  df_in    = h_mat,
-  ttl      = names(h_mat),
-  lec_labs = lec_labs
-)
-
 type_heats_v2 <- h_mat %>%
-  create_cor_heatmap(ln_clr = fade_0)
+  create_cor_heatmap(ln_clr = fade_0) +
+  theme(
+    axis.text.x = element_text(size = txt_pt2),
+    axis.text.y = element_text(size = txt_pt2),
+    axis.title  = element_text(size = ttl_pt2)
+  )
 
 heats_fig <- plot_grid(
   type_heats_v2, NULL,
@@ -1161,20 +1161,18 @@ type_boxes <- gns %>%
         axis.text.y     = element_text(size = txt_pt1 * 0.75),
         strip.text      = element_text(size = txt_pt2)
       )
-  }) %>%
-  plot_grid(
-    plotlist = .,
-    align = "vh",
-    axis  = "trbl",
-    nrow  = 2
-  )
+  })
+
+type_boxes <- type_boxes %>%
+  wrap_plots(nrow = 2, guides = "collect") &
+  theme(legend.position = "top")
 ```
 
 ```{r "fig S3", fig.width = 12, fig.height = 20}
 plot_grid(
-  type_fig, NULL, heats_fig, NULL, type_boxes,
-  rel_heights = c(0.7, 0.04, 0.4, 0.04, 1.2),
-  labels      = c("", "", "", "", "D"),
+  type_fig, heats_fig, type_boxes,
+  rel_heights = c(0.9, 0.4, 1.2),
+  labels      = c("", "", "D"),
   label_size  = ttl_pt2 * 1.5,
   ncol        = 1
 )
@@ -1830,16 +1828,22 @@ other_examples <- create_go_gene_plots(
   genes         = genes_to_plot,
   clrs          = "grey75",
   type_clmn     = "cell_type_2",
-  cell_types    = c("LEC", "BEC", "FRC")
+  cell_types    = c("LEC", "BEC", "FRC"),
+  ln_size       = 1.5,
+  pt_size       = 2
 ) +
-  theme(plot.margin = margin(20, 0, 0, 0))
+  theme(
+    plot.margin = margin(20, 0, 0, 0),
+    legend.position = "right",
+    legend.key.height = unit(25, "pt")
+  )
 
 other_examples <- plot_grid(
   NULL, other_examples, NULL,
   labels     = c("", "G", ""),
   label_size = ttl_pt2 * 1.5,
   nrow       = 1,
-  rel_widths = c(0.31, 0.38, 0.31),
+  rel_widths = c(0.35, 0.38, 0.27),
   hjust      = -1,
   vjust      = 1.5
 )
@@ -1870,7 +1874,8 @@ fig5_umaps <- plt_args %>%
     size       = 0.05,
     facet_plot = NULL,
     n_lab      = TRUE,
-    key_height = 35
+    key_height = 35,
+    lab_size   = txt_pt2 + 1
   ) %>%
   map(~ .x + theme(plot.margin = margin(5, 5, 5, 30)))
 
@@ -1903,7 +1908,7 @@ E.  Enrichment scores are shown for the top two GO modules identified for the 24
 F.  A selection of top upregulated genes identified for the terms shown in E are plotted as described in D.
 G.  Expression of homeostatic cytokines is shown for BECs, FRCs (combination of FRCs and PvCs shown in A-F), and LECs as described in D. A solid line indicates that the gene is significantly up- or down-regulated between the samples.  
 
-```{r "GO figures", fig.width = 13, fig.height = 18}
+```{r "GO figures", fig.width = 14.3, fig.height = 21}
 plt_args <- list(
   heat     = go_heat[plt_comps],
   examples = go_examples[plt_comps],
@@ -1920,7 +1925,7 @@ plt_panels <- plt_args %>%
       labels     = args$labels,
       label_size = ttl_pt2 * 1.5,
       vjust      = args$vjust,
-      hjust      = c(-0.4, 1),
+      hjust      = c(-0.4, 0.5),
       nrow       = 1,
       align      = "h",
       axis       = "tb"
@@ -1932,7 +1937,7 @@ plot_grid(
   plt_panels[[1]], plt_panels[[2]],
   other_examples,
   ncol = 1,
-  rel_heights = c(0.8, 0.64, 1, 0.65)
+  rel_heights = c(0.8, 0.64, 1, 0.7)
 )
 ```
 

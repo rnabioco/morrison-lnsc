@@ -531,18 +531,20 @@ create_type_umaps <- function(so_in, data_col, x = "hUMAP_1", y = "hUMAP_2",
   
   res <- lift_dl(plot_scatter)(args) +
     ggtitle(ttl) +
+    base_theme +
     theme(
       aspect.ratio      = 0.9,
       plot.margin       = margin(15, 15, 30, 15),
-      axis.title        = element_blank(),
-      axis.text         = element_blank(),
-      axis.ticks        = element_blank(),
-      legend.title      = element_blank(),
+      plot.title        = element_text(face = "plain", hjust = 0.5, size = ttl_pt2),
+      strip.text        = element_text(size = ttl_pt1),
       panel.background  = element_blank(),
-      plot.title        = element_text(face = "plain", hjust = 0.5),
+      legend.title      = element_blank(),
       legend.position   = "right",
       legend.key.height = unit(key_height, "pt"),
-      legend.text       = element_text(size = lab_size)
+      legend.text       = element_text(size = lab_size),
+      axis.title        = element_blank(),
+      axis.text         = element_blank(),
+      axis.ticks        = element_blank()
     )
   
   if (n_lab) {
@@ -1069,8 +1071,8 @@ create_go_heatmap <- function(df_in, go_in, n_clusters = 2, n_terms = 5,
       data   = ~ filter(.x, significant),
       alpha  = 1,
       shape  = 5,
-      size   = 2,
-      stroke = 0.75
+      size   = 3,
+      stroke = 1.2
     ) +
     scale_alpha_continuous(range = c(0, 1), breaks = seq(0, 1000, 15)) +
     scale_color_manual(values = "black") +
@@ -1091,7 +1093,7 @@ create_go_heatmap <- function(df_in, go_in, n_clusters = 2, n_terms = 5,
         label.position = "top",
         label.theme    = element_text(size = ttl_pt2),
         label.vjust    = 0.45,
-        override.aes   = list(size = 3, stroke = 1),
+        override.aes   = list(size = 4.5, stroke = 1.7),
       ),
       fill = "none"
     ) +
@@ -1233,18 +1235,13 @@ create_go_gene_plots <- function(all_exp_data = list("8hpi" = so_8, "24hpi" = so
                                  clrs = c(`1` = "orange"), cell_types = 10,
                                  lvls = c("mock", "8hpi", "24hpi"), n_cells = 10,
                                  type_clmn = "lec_type", only_show_upreg = TRUE,
-                                 exclude_cell_types = NULL,
-                                 ttl = "Differentially expressed",
+                                 exclude_cell_types = NULL, ln_size = 0.75, pt_size = 1.5,
+                                 ttl = "Differentially\nexpressed",
                                  cell_type_lvls = c(
                                    "LEC", "cLEC", "Collecting", "fLEC", "tzLEC",
                                    "Valve", "Marco_LEC", "BEC", "FRC",
                                    "PvC"
                                   )
-                                 # cell_type_lvls = c(
-                                 #   "LEC", "cLEC", "Collecting", "fLEC",
-                                 #   "Marco_LEC", "tzLEC", "Valve", "BEC", "FRC",
-                                 #   "PvC"
-                                 #  )
                                  ) {
   
   # Genes to plot
@@ -1323,8 +1320,6 @@ create_go_gene_plots <- function(all_exp_data = list("8hpi" = so_8, "24hpi" = so
       q1      = quantile(value, 0.25),
       value   = median(value),
       .groups = "drop"
-      # sd      = sd(value),
-      # err     = qt(0.975, df = n - 1) * (sd / sqrt(n)),  # 95% CI
     ) %>%
     mutate(
       x_end     = match(treatment, lvls),
@@ -1389,15 +1384,15 @@ create_go_gene_plots <- function(all_exp_data = list("8hpi" = so_8, "24hpi" = so
       aes(x = treatment, ymin = q1, ymax = q3),
       color = "grey80",
       width = 0,
-      linewidth = 1.5
+      linewidth = pt_size
     ) +
-    geom_point(size = 1.5) +
+    geom_point(size = pt_size) +
     geom_segment(
       aes(
         x = x, xend = x_end, y = y, yend = y_end,
         linetype = Upregulated
       ),
-      linewidth = 0.75,
+      linewidth = ln_size,
       data  = ln_dat
     ) +
     facet_grid(
@@ -1426,7 +1421,7 @@ create_go_gene_plots <- function(all_exp_data = list("8hpi" = so_8, "24hpi" = so
     theme(
       aspect.ratio       = aspect,
       legend.position    = "bottom",
-      legend.key.width   = unit(25, "pt"),
+      legend.key.width   = unit(20, "pt"),
       legend.title.align = 0.5,
       legend.text        = element_text(size = ttl_pt1),
       strip.placement    = "outside",
@@ -1525,7 +1520,8 @@ create_go_summary_plots <- function(go_in, degs_in,
       free_y     = FALSE,
       clrs       = clst_clrs,
       exclude_cell_types = exclude_cell_types
-    )
+    ) +
+    scale_alpha_continuous(range = c(0, 1), n.breaks = 6)
   
   heat$heatmap <- heat$heatmap +
     theme(axis.text = element_text(size = 10))
@@ -2378,6 +2374,7 @@ base_theme <- djvdj_theme() +
 
 umap_theme <- base_theme +
   theme(
+    aspect.ratio = 0.9,
     panel.border = element_rect(color = NA, fill = NA),
     axis.title   = element_blank(),
     axis.line.x  = element_blank(),
