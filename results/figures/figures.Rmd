@@ -27,7 +27,7 @@ params:
   lec_res:      11.5                      # Clustering resolution for annotating LECs
   lec_n_genes:  1500                      # Number of variable genes for annotating LECs
 editor_options: 
-  chunk_output_type: inline
+  chunk_output_type: console
 ---
 
 <br>
@@ -408,17 +408,9 @@ madcam_bxs <- plt_dat %>%
 ```
 
 ```{r "fig 1", fig.width = 16, fig.height = 12}
-top <- plot_grid(
-  chikv_score_umap, chikv_typs_umap,
-  labels = c("A", "B"), label_size = ttl_pt2 * 1.5,
-  nrow   = 1,
-  align  = "h",
-  axis   = "tb"
-)
-
 top <- wrap_plots(
   chikv_score_umap, plot_spacer(), chikv_typs_umap,
-  widths = c(1, 0.1, 1)
+  widths = c(1, 0.05, 1)
 ) +
   plot_annotation(tag_levels = "A") &
   theme(plot.tag = element_text(size = ttl_pt2 * 1.5, face = "bold"))
@@ -444,7 +436,7 @@ plot_grid(
 
 Mxra8 expression is shown for CHIKV+/- cells for the 8 hpi timepoint. Mxra8 expression appears higher in CHIKV+ FRCs and BECs, suggesting a distinct mechanism of CHIKV entry. This is a result we discussed previously and could be included in a supplemental figure.
 
-```{r, fig.width = 17, fig.height = 5}
+```{r, fig.width = 17, fig.height = 3.5}
 mxra8_bxs <- lec_type_cols[c("Marco_LEC", "FRC", "BEC")] %>%
   imap(~ {
     plt_dat %>%
@@ -460,7 +452,7 @@ plot_grid(plotlist = mxra8_bxs, nrow = 1)
 
 Marco and Mxra8 expression is shown for CHIKV-high/low cells for the 24 hpi timepoint. Using the updated cell type annotations, we still observe increased Marco expression for CHIKV-high Marco LECs. There is no difference in Mxra8 expression for CHIKV-high FRCs and BECs at 24 hpi.
 
-```{r, fig.width = 17, fig.height = 5}
+```{r, fig.width = 17, fig.height = 3.5}
 plts <- lec_type_cols[c("FRC", "BEC")] %>%
   imap(~ {
     so_24 %>%
@@ -1782,6 +1774,12 @@ plt_args <- list(
   )
 )
 
+cell_type_lvls <- c(
+  "LEC", "cLEC", "Collecting", "fLEC", "tzLEC",
+  "Valve", "Marco_LEC", "BEC", "FRC",
+  "PvC"
+)
+
 go_examples <- plt_args %>%
   pmap(~ {
     args <- list(...)
@@ -1806,6 +1804,7 @@ go_examples <- plt_args %>%
       clrs               = args$clrs,
       type_clmn          = "lec_type",
       exclude_cell_types = exclude_cell_types,
+      cell_type_lvls     = cell_type_lvls,
       only_show_upreg    = TRUE,
       ttl                = "Upregulated"
     )
@@ -1823,14 +1822,15 @@ degs_24_merged <- bind_rows(degs[c("so_merge-up_celltype2", "so_merge-down_cellt
 
 # Create plots
 other_examples <- create_go_gene_plots(
-  all_exp_data  = list("8hpi" = so_8, "24hpi" = so_merge),
-  all_degs_data = list("8hpi" = degs_8_merged, "24hpi" = degs_24_merged),
-  genes         = genes_to_plot,
-  clrs          = "grey75",
-  type_clmn     = "cell_type_2",
-  cell_types    = c("LEC", "BEC", "FRC"),
-  ln_size       = 1.5,
-  pt_size       = 2
+  all_exp_data   = list("8hpi" = so_8, "24hpi" = so_merge),
+  all_degs_data  = list("8hpi" = degs_8_merged, "24hpi" = degs_24_merged),
+  genes          = genes_to_plot,
+  clrs           = "grey75",
+  type_clmn      = "cell_type_2",
+  cell_types     = c("LEC", "BEC", "FRC"),
+  cell_type_lvls = cell_type_lvls,
+  ln_size        = 1.5,
+  pt_size        = 2
 ) +
   theme(
     plot.margin = margin(20, 0, 0, 0),
@@ -1997,6 +1997,103 @@ The similarity between GO clusters identified for the 8 and 24 hpi timepoints is
 sim_heatmap
 ```
 
+<br>
+
+### Table
+
+```{r}
+# Names for sheets to save
+sheet_nms <- names(degs) %>%
+  str_remove("^so_") %>%
+  str_remove("_[a-zA-Z0-9]+$") %>%
+  str_replace("^8", "8hpi-mock") %>%
+  str_replace("^24", "24hpi-mock") %>%
+  str_replace("^merge", "24hpi-8hpi") %>%
+  set_names(names(degs))
+
+# Format DEG tables
+degs_tbls <- degs %>%
+  map(~ {
+    typ_clmns <- c(
+      cell_type = "lec_type",
+      cell_type = "cell_type_2"
+    )
+    
+    .x %>%
+      relocate(any_of(typ_clmns), .before = gene) %>%
+      dplyr::select(-minimump_p_val, -ends_with("_adj")) %>%
+      arrange(cell_type) %>%
+      mutate(cell_type = fct_relevel(cell_type, cell_type_lvls)) %>%
+      arrange(cell_type, max_pval)
+  })
+
+# Format GO tables
+go_clmns <- c(
+  cell_type = "Cluster",
+  "Description", "ID",
+  "GeneRatio", "BgRatio",
+  "geneID", "enrichment",
+  "pvalue", "p.adjust"
+)
+
+clsts_filt <- clusters[plt_comps] %>%
+  map(~ dplyr::select(.x$clusters, Description, ID, cluster))
+
+go_tbls <- go[plt_comps] %>%
+  imap(~ {
+    .x@compareClusterResult %>%
+      as_tibble() %>%
+      filter(p.adjust < 0.05, n_ovlp >= go_ovlp[[.y]]) %>%
+      dplyr::select(all_of(go_clmns)) %>%
+      arrange(cell_type) %>%
+      mutate(cell_type = fct_relevel(cell_type, cell_type_lvls)) %>%
+      left_join(clsts_filt[[.y]], by = c("ID", "Description")) %>%
+      arrange(cluster, cell_type, p.adjust, enrichment)
+  })
+
+# Format fig 5G tables
+fig5g_degs <- c(
+  "so_8-up_celltype2", "so_8-down_celltype2",
+  "so_merge-up_celltype2", "so_merge-down_celltype2"
+)
+
+fig5g_degs <- degs_tbls[fig5g_degs] %>%
+  imap_dfr(~ {
+    nm <- sheet_nms[[.y]]
+    
+    .x %>%
+      mutate(comparison = nm) %>%
+      filter(cell_type %in% c("LEC", "BEC", "FRC"))
+  })
+
+# Write excel file
+ex_file <- here(params$table_dir, "fig5_supp.xlsx")
+
+if (!file.exists(ex_file)) {
+  names(go_tbls) <- sheet_nms[names(go_tbls)] %>%
+    map_chr(~ str_c(.x, "_GO"))
+  
+  degs_tbls <- degs_tbls[plt_comps]
+  
+  names(degs_tbls) <- sheet_nms[names(degs_tbls)] %>%
+    map_chr(~ str_c(.x, "_genes"))
+  
+  sheets <- append(degs_tbls, go_tbls)
+  sheets <- append(sheets, list(Fig5G = fig5g_degs))
+  
+  sheets %>%
+    iwalk(~ {
+      .x %>%
+        as.data.frame() %>%
+        write.xlsx(
+          file      = ex_file,
+          sheetName = .y,
+          row.names = FALSE,
+          append    = TRUE
+        )
+    })
+}
+```
 
 
 ```{r "GO CLUSTER TERM SIMILARITY", eval = FALSE}
