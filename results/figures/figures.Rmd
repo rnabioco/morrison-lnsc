@@ -436,7 +436,7 @@ plot_grid(
 
 Mxra8 expression is shown for CHIKV+/- cells for the 8 hpi timepoint. Mxra8 expression appears higher in CHIKV+ FRCs and BECs, suggesting a distinct mechanism of CHIKV entry. This is a result we discussed previously and could be included in a supplemental figure.
 
-```{r, fig.width = 17, fig.height = 3.5}
+```{r, fig.width = 17, fig.height = 4.2}
 mxra8_bxs <- lec_type_cols[c("Marco_LEC", "FRC", "BEC")] %>%
   imap(~ {
     plt_dat %>%
@@ -452,7 +452,7 @@ plot_grid(plotlist = mxra8_bxs, nrow = 1)
 
 Marco and Mxra8 expression is shown for CHIKV-high/low cells for the 24 hpi timepoint. Using the updated cell type annotations, we still observe increased Marco expression for CHIKV-high Marco LECs. There is no difference in Mxra8 expression for CHIKV-high FRCs and BECs at 24 hpi.
 
-```{r, fig.width = 17, fig.height = 3.5}
+```{r, fig.width = 17, fig.height = 4.2}
 plts <- lec_type_cols[c("FRC", "BEC")] %>%
   imap(~ {
     so_24 %>%
@@ -1586,7 +1586,7 @@ go_sim_data <- godata(
 
 # Comparisons to use for GO analysis and plotting
 # only want to use two main comparisons for figures
-go_comps  <- grep("^so_(8|24|merge)-up_lectype$", names(degs), value = TRUE)
+go_comps  <- grep("^so_(8|24|merge)-(up|down)_lectype$", names(degs), value = TRUE)
 plt_comps <- grep("^so_(8|merge)-up_lectype$", names(degs), value = TRUE)
 
 # Get GO terms
@@ -1663,7 +1663,7 @@ clusters <- clst_args %>%
       exclude_cell_types = NULL
     )
   }) %>%
-  discard(is.null)
+  purrr::discard(is.null)
 
 # Calculate similarity between each 8hpi and 24hpi GO cluster
 # want to determine which GO clusters are most similar to each other
@@ -1941,67 +1941,7 @@ plot_grid(
 )
 ```
 
-<br>
-
-### Extended GO analysis {.tabset .tabset-pills}
-
-A.  Dendrogram showing gene ontology modules. GO terms were identified for each cell type and filtered as described in Fig 5. Terms were clustered into 5 modules based on the pairwise overlap between terms.
-B.  Enrichment scores are shown for each GO module identified for each timepoint, as described in Fig 5.
-C.  Top upregulated genes are shown for each GO module as described in Fig 5.
-
-```{r "expanded GO figures", fig.width = 16, fig.height = 19, results = "asis"}
-plt_args <- list(
-  go_in   = go[go_comps],
-  degs_in = degs[go_comps],
-  ovlp    = go_ovlp[go_comps],
-  ttl     = go_comps
-)
-
-plt_args %>%
-  pwalk(~ {
-    args <- list(...)
-    
-    ttl <- str_remove(args$ttl, "^so_")
-    ttl <- str_remove(ttl, "_[a-zA-Z]+$")
-    ttl <- str_replace(ttl, "^merge", "24-8")
-    
-    cat("\n\n#### ", ttl, "\n\n")
-    
-    plt <- create_go_summary_plots(
-      go_in      = args$go_in,
-      degs_in    = args$degs_in,
-      n_overlap  = args$ovlp,
-      n_clusters = 5,
-      n_terms    = 6,
-      n_genes    = 4,
-      pval       = 0.05,
-      n_shared   = 1,
-      exclude_cell_types = exclude_cell_types
-    )
-
-    if (is.null(plt)) {
-      plt <- ggplot() +
-        geom_blank()
-    }
-
-    print(plt)
-    cat("\n\n<br>\n\n")
-  })
-```
-
-### Cluster similarity
-
-The similarity between GO clusters identified for the 8 and 24 hpi timepoints is shown below.
-
-```{r "cluster similarity heatmap", fig.width = 8, fig.height = 4}
-sim_heatmap
-```
-
-<br>
-
-### Table
-
-```{r}
+```{r "supp table"}
 # Names for sheets to save
 sheet_nms <- names(degs) %>%
   str_remove("^so_") %>%
@@ -2066,21 +2006,22 @@ fig5g_degs <- degs_tbls[fig5g_degs] %>%
       filter(cell_type %in% c("LEC", "BEC", "FRC"))
   })
 
+# Format sheet names
+names(go_tbls) <- sheet_nms[names(go_tbls)] %>%
+  map_chr(~ str_c(.x, "_GO"))
+
+degs_tbls <- degs_tbls[plt_comps]
+
+names(degs_tbls) <- sheet_nms[names(degs_tbls)] %>%
+  map_chr(~ str_c(.x, "_genes"))
+
+sheets <- append(degs_tbls, go_tbls)
+sheets <- append(sheets, list(Fig5G = fig5g_degs))
+
 # Write excel file
 ex_file <- here(params$table_dir, "fig5_supp.xlsx")
 
 if (!file.exists(ex_file)) {
-  names(go_tbls) <- sheet_nms[names(go_tbls)] %>%
-    map_chr(~ str_c(.x, "_GO"))
-  
-  degs_tbls <- degs_tbls[plt_comps]
-  
-  names(degs_tbls) <- sheet_nms[names(degs_tbls)] %>%
-    map_chr(~ str_c(.x, "_genes"))
-  
-  sheets <- append(degs_tbls, go_tbls)
-  sheets <- append(sheets, list(Fig5G = fig5g_degs))
-  
   sheets %>%
     iwalk(~ {
       .x %>%
@@ -2093,7 +2034,91 @@ if (!file.exists(ex_file)) {
         )
     })
 }
+
+
+
+# # Print table
+# sheets %>%
+#   iwalk(~ {
+#     cat("#### ", .y, "\n\n")
+#     
+#     print(.x)
+#   })
 ```
+
+<br>
+
+### Extended GO analysis {.tabset .tabset-pills}
+
+A.  Dendrogram showing gene ontology modules. GO terms were identified for each cell type and filtered as described in Fig 5. Terms were clustered into 5 modules based on the pairwise overlap between terms.
+B.  Enrichment scores are shown for each GO module identified for each timepoint, as described in Fig 5.
+C.  Top upregulated genes are shown for each GO module as described in Fig 5.
+
+```{r "expanded GO figures", fig.width = 16, fig.height = 19, results = "asis"}
+# Determine which comparisons are for upregulated genes
+go_upreg <- set_names(grepl("-up", go_comps), go_comps)
+
+plt_args <- list(
+  go_in      = go[go_comps],
+  degs_in    = degs[go_comps],
+  ovlp       = go_ovlp[go_comps],
+  only_upreg = go_upreg[go_comps],
+  ttl        = go_comps
+)
+
+# Create summary plots
+plt_args %>%
+  pwalk(~ {
+    args <- list(...)
+    
+    ttl <- str_remove(args$ttl, "^so_")
+    ttl <- str_remove(ttl, "_[a-zA-Z]+$")
+    ttl <- str_replace(ttl, "^merge", "24-8")
+    
+    cat("\n\n#### ", ttl, "\n\n")
+    
+    degs_type <- ifelse(args$only_upreg, "up", "down")
+    
+    degs_type <- c("8", "merge") %>%
+      str_c("so_", ., "-", degs_type, "_lectype")
+    
+    all_degs_data = list(
+      "8hpi"  = degs[[degs_type[1]]],
+      "24hpi" = degs[[degs_type[2]]]
+    )
+    
+    plt <- create_go_summary_plots(
+      go_in      = args$go_in,
+      degs_in    = args$degs_in,
+      n_overlap  = args$ovlp,
+      n_clusters = 5,
+      n_terms    = 6,
+      n_genes    = 4,
+      pval       = 0.05,
+      n_shared   = 1,
+      all_degs_data = all_degs_data,
+      only_show_upreg = args$only_upreg,
+      exclude_cell_types = exclude_cell_types
+    )
+
+    if (is.null(plt)) {
+      plt <- ggplot() +
+        geom_blank()
+    }
+
+    print(plt)
+    cat("\n\n<br>\n\n")
+  })
+```
+
+### Cluster similarity
+
+The similarity between GO clusters identified for the 8 and 24 hpi timepoints is shown below.
+
+```{r "cluster similarity heatmap", fig.width = 8, fig.height = 4}
+sim_heatmap
+```
+
 
 
 ```{r "GO CLUSTER TERM SIMILARITY", eval = FALSE}

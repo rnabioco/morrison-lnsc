@@ -1368,9 +1368,11 @@ create_go_gene_plots <- function(all_exp_data = list("8hpi" = so_8, "24hpi" = so
   if (only_show_upreg) {
     ln_dat <- ln_dat %>%
       group_by(!!sym(type_clmn)) %>%
-      filter(any(Upregulated == "TRUE")) %>%
-      ungroup()
+      filter(any(Upregulated == "TRUE")) %>%  # filter like this since column
+      ungroup()                               # converted to factor for plotting
   }
+  
+  if (nrow(ln_dat) == 0) return(NULL)
   
   # Create plots
   aspect <- length(gns) / n_distinct(plt_dat$name) * 0.9
@@ -1465,6 +1467,7 @@ create_go_summary_plots <- function(go_in, degs_in,
                                     ),
                                     n_clusters = 5, n_terms = 6, n_genes = 4,
                                     pval = 0.05, n_overlap = 3, n_shared = 1,
+                                    only_show_upreg = TRUE,
                                     exclude_cell_types = NULL
                                     ) {
   
@@ -1544,7 +1547,7 @@ create_go_summary_plots <- function(go_in, degs_in,
     genes              = gns,
     cell_types         = Inf,
     clrs               = clst_clrs,
-    only_show_upreg    = TRUE,
+    only_show_upreg    = only_show_upreg,
     exclude_cell_types = exclude_cell_types
   ) +
     theme(
