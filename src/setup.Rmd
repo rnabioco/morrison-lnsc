@@ -2327,6 +2327,53 @@ save_objs(so_24,    ob_dir = params$so_dir)
 rm(so_merge, so_frc, so_lec, so_8, so_24)
 ```
 
+```{r "save matrices"}
+# Format meta.data
+so_merge <- qread(file.path(params$so_dir, "so_merge.qs"))
+
+u_clmns <- c("UMAP_1", "UMAP_2")
+
+so_merge <- so_merge %>%
+  AddMetaData(FetchData(so_8, u_clmns), col.name = str_c(u_clmns, "_8h")) %>%
+  AddMetaData(FetchData(so_24, u_clmns), col.name = str_c(u_clmns, "_24h"))
+
+# Write matrices and meta.data
+meta_cols <- c(
+  "cell_id",      "orig.ident",
+  "treatment",    "rep",
+  "tm",
+  "nCount_RNA",   "nFeature_RNA",
+  "pct_mito",
+  "nCount_CHIKV", "CHIKV_sgRNA",
+  "CHIKV_5",      "pct_CHIKV",
+  
+  "enr_nCount_CHIKV", "enr_nCount_RNA",
+  "enr_pct_CHIKV",
+  
+  "cell_type",    "lec_type",
+  "chikv_grp",
+  "UMAP_1",       "UMAP_2",
+  "UMAP_1_8h",    "UMAP_2_8h",
+  "UMAP_1_24h",   "UMAP_2_24h"
+)
+
+prfx      <- here(params$geo_dir, "morrison_")
+geo_files <- c("count_matrix", "metadata")
+geo_files <- str_c(prfx, geo_files, ".tsv.gz")
+
+if (any(!file.exists(geo_files))) {
+  so_merge %>%
+    export_matrices(
+      assays      = c("RNA", "CHIKV"),
+      columns     = meta_cols,
+      out_dir     = geo_dir,
+      file_prefix = prfx
+    )
+}
+
+rm(so_merge)
+```
+
 ```{r "load objects"}
 so_lec   <- qread(file.path(params$so_dir, "so_lec.qs"))
 so_8     <- qread(file.path(params$so_dir, "so_8.qs"))

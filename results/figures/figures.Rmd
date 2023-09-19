@@ -15,6 +15,7 @@ params:
   src_dir:      "src"
   so_dir:       "~/Dropbox/Ryan/Projects/morrison-lnsc/results/sobjs"
   table_dir:    "results/tables"
+  geo_dir:      "results/geo"
   so_24:        "~/Dropbox/Ryan/Projects/morrison-scRNA-seq/results/2021-01-08/sobjs/so.rds"
   tm:           "8hpi"                    # Timepoint label
   unenr_dir:    "results/2021-04-16"      # Directory for unenriched data
