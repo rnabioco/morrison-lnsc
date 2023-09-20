@@ -2327,6 +2327,14 @@ save_objs(so_24,    ob_dir = params$so_dir)
 rm(so_merge, so_frc, so_lec, so_8, so_24)
 ```
 
+```{r "load objects"}
+so_lec   <- qread(file.path(params$so_dir, "so_lec.qs"))
+so_8     <- qread(file.path(params$so_dir, "so_8.qs"))
+so_24    <- qread(file.path(params$so_dir, "so_24.qs"))
+
+so_merge_df <- read_tsv(file.path(params$so_dir, "so_merge.tsv.gz"))
+```
+
 ```{r "save matrices"}
 # Format meta.data
 so_merge <- qread(file.path(params$so_dir, "so_merge.qs"))
@@ -2357,9 +2365,10 @@ meta_cols <- c(
   "UMAP_1_24h",   "UMAP_2_24h"
 )
 
-prfx      <- here(params$geo_dir, "morrison_")
+geo_dir   <- here(params$geo_dir)
+prfx      <- "morrison_"
 geo_files <- c("count_matrix", "metadata")
-geo_files <- str_c(prfx, geo_files, ".tsv.gz")
+geo_files <- here(geo_dir, str_c(prfx, geo_files, ".tsv.gz"))
 
 if (any(!file.exists(geo_files))) {
   so_merge %>%
@@ -2372,14 +2381,6 @@ if (any(!file.exists(geo_files))) {
 }
 
 rm(so_merge)
-```
-
-```{r "load objects"}
-so_lec   <- qread(file.path(params$so_dir, "so_lec.qs"))
-so_8     <- qread(file.path(params$so_dir, "so_8.qs"))
-so_24    <- qread(file.path(params$so_dir, "so_24.qs"))
-
-so_merge_df <- read_tsv(file.path(params$so_dir, "so_merge.tsv.gz"))
 ```
 
 ```{r "theme"}
