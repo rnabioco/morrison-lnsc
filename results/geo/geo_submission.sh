@@ -1,8 +1,9 @@
 #! /bin/usr/env bash
 
-data='../../../data/210108_A00405_0331_BHNW52DSXY'
-res='..'
-sub='20210517_sheridan_geo'
+data=('210416_A00405_0383_AHY2N3DSXY' '210716_A00405_0430_BHHFF2DSX2')
+dat_dir='../../data'
+res_dir=('../2021-04-16' '../2021-07-16')
+sub='20230919_sheridan_geo'
 sums='geo_md5sums.txt'
 meta='geo_metadata.xlsx'
 
@@ -16,21 +17,25 @@ ln -sr "$meta" "$sub"
 # cellranger matrices
 tmp=$(mktemp tmp.XXXXX)
 
-arr=("$res/M?/" "$res/A?/")
+nms=('AF1' 'AF2' 'M1' 'M2')
 
-for dir in ${arr[@]}
+for res in ${res_dir[@]}
 do
-    nm="$(basename $dir)"
-    mat_dir='outs/filtered_feature_bc_matrix'
-
-    for file in 'barcodes.tsv.gz' 'features.tsv.gz' 'matrix.mtx.gz'
+    for nm in ${nms[@]}
     do
-        mat="$sub/${nm}_$file"
-
-        ln -sr "$dir/$mat_dir/$file" "$mat"
-
-        md5sum "$mat" \
-            >> "$tmp"
+        run=$(basename $res)
+        dir="$res/$nm"
+        mat_dir="$res/$nm/outs/filtered_feature_bc_matrix"
+    
+        for file in 'barcodes.tsv.gz' 'features.tsv.gz' 'matrix.mtx.gz'
+        do
+            mat="$sub/${run}_${nm}_$file"
+    
+            ln -sr "$mat_dir/$file" "$mat"
+    
+            md5sum "$mat" \
+                >> "$tmp"
+        done
     done
 done
 
@@ -44,23 +49,22 @@ do
 done
 
 # fastqs
-for dir in ${arr[@]};
+for dat in ${data[@]}
 do
-    fq="$(basename $dir)"
-    fq=$data/$fq*.fastq.gz
+    fq=$dat_dir/$dat/*.fastq.gz
 
     ln -sr $fq "$sub"
+
+    cat "$dat_dir/$dat/md5sums.txt" \
+        | sort -k2,2 \
+        | awk '$2 !~ ".csv$"' \
+        >> $tmp
 done
 
 # format md5sums
-cat $data/md5sums.txt \
-    >> $tmp
-
 cat $tmp \
     | awk -v OFS="  " '{gsub("^.*/", "", $2); print}' \
-    | sort -k2,2 \
     > $sums
 
 rm $tmp
-
 
