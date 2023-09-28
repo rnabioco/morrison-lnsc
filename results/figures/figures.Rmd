@@ -241,28 +241,6 @@ frac_8 <- frac_dat %>%
     axis.title.x = element_blank(),
     legend.position = "none",
   )
-
-
-
-# # To plot density for hypergeometric distribution for fLECs
-# dhyper(
-#   x = 1:23,  # number of white balls drawn
-#   k = 74,    # number of balls drawn
-#   m = 267,   # number of white balls in urn
-#   n = 3286   # number of black balls in urn
-# )
-# 
-# # As a test, calculate p-value for identitified GO term
-# # file  ID  GeneRatio BgRatio pvalue  p.adjust
-# # merge_lectype_chikv-up  GO:0045087  84/191  632/15076 6.588999771563824e-65 1.7875956380252655e-61
-# 
-# .calc_fisher(
-#   x = 84,
-#   k = 191,
-#   m = 632,
-#   n = 15076 - 632,
-#   alt = "greater"
-# )
 ```
 
 ```{r "CHIKV score boxes", fig.width = 10, fig.height = 5}
@@ -371,41 +349,6 @@ madcam_bxs <- plt_dat %>%
     GENE = "Madcam1", TYPE = "fLEC",
     clr = "#E69F00", lvls = plt_lvls
   )
-
-
-
-# # CHECK FOR CONTAMINATING fLEC CLUSTERS
-# # filter 24hpi Marco_LEC clusters to remove Madcam1+ cells
-# # removal of Madcam1+ clusters does not affect overall result
-# # i.e. CHIKV-high still shows higher Marco expression than CHIKV-low
-# test_dat <- so_lec_24 %>%
-#   mutate_meta(
-#     mutate,
-#     chikv_grp = ifelse(treatment == "mock", treatment, chikv_grp)
-#   ) %>%
-#   subset(lec_type == "Marco_LEC") %>%
-#   FetchData(c(
-#     "Madcam1", "Marco",
-#     "seurat_clusters", "orig.ident", "treatment", "rep",
-#     "chikv_grp"
-#   ))
-# 
-# clsts <- test_dat %>%
-#   group_by(seurat_clusters) %>%
-#   summarize(sig = mean(Madcam1), n = n()) %>%
-#   as.data.frame() %>%
-#   arrange(desc(sig)) %>%
-#   filter(sig <= 0.4) %>%
-#   pull(seurat_clusters)
-# 
-# plt_dat <- so_lec_24 %>%
-#   subset(seurat_clusters %in% clsts)
-# 
-# plt_dat %>%
-#   create_gene_boxplot("Madcam1", "Marco_LEC")
-# 
-# plt_dat %>%
-#   create_gene_boxplot("Marco", "Marco_LEC")
 ```
 
 ```{r "fig 1", fig.width = 16, fig.height = 12}
@@ -1380,16 +1323,6 @@ other_examples <- plot_grid(
   rel_widths = c(0.9, 1),
   nrow       = 1
 )
-
-# other_examples <- plot_grid(
-#   NULL, other_examples, NULL,
-#   labels     = c("", "G", ""),
-#   label_size = ttl_pt2 * 1.5,
-#   rel_widths = c(0.32, 1, 0.8),
-#   nrow       = 1
-#   # hjust      = -1,
-#   # vjust      = 1.5
-# )
 ```
 
 ```{r "fig 5 UMAPs", fig.width = 12, fig.height = 6}
