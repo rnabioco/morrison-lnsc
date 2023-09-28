@@ -38,6 +38,7 @@ library(knitr)
 library(broom)
 library(cli)
 library(xlsx)
+library(devtools)
 
 source(here(params$src_dir, "funs.R"))
 ```

@@ -1578,3 +1578,15 @@ if (!file.exists(ex_file)) {
     })
 }
 ```
+
+---
+
+<br>
+
+<br>
+
+## Session info
+
+```{r}
+session_info()
+```
