@@ -1069,13 +1069,7 @@ so_24_chikv <- so_24 %>%
 deg_args <- tribble(
   ~so_in,        ~type_clmn, ~treat_clmn, ~ident_1,     ~ident_2,    ~log_fc,
   "so_8",        "lec_type", "treatment", "CHIKV",      "mock",      c(0.15, Inf),    # 8hpi-mock up/down 
-  "so_8",        "lec_type", "treatment", "CHIKV",      "mock",      c(-Inf, -0.15),      
-  "so_24",       "lec_type", "treatment", "CHIKV",      "mock",      c(0.25, Inf),    # 24hpi-mock up/down
-  "so_24",       "lec_type", "treatment", "CHIKV",      "mock",      c(-Inf, -0.25),
   "so_merge",    "lec_type", "treatment", "24hpi",      "8hpi",      c(0.25, Inf),    # 24hpi-8hpi up/down
-  "so_merge",    "lec_type", "treatment", "24hpi",      "8hpi",      c(-Inf, -0.25),
-  "so_8_chikv",  "lec_type", "chikv_grp", "CHIKV-high", "CHIKV-low", c(0.15, Inf),    # 8hpi  CHIKV-high/low up
-  "so_24_chikv", "lec_type", "chikv_grp", "CHIKV-high", "CHIKV-low", c(0.15, Inf),    # 24hpi CHIKV-high/low up
   
   "so_8",        "cell_type_2", "treatment", "CHIKV",   "mock",      c(0.15, Inf),    # 8hpi-mock up/down broad cell types
   "so_8",        "cell_type_2", "treatment", "CHIKV",   "mock",      c(-Inf, -0.15),
@@ -1127,7 +1121,7 @@ go_sim_data <- godata(
 
 # Comparisons to use for GO analysis and plotting
 # only want to use two main comparisons for figures
-go_comps  <- grep("^so_(8|24|merge)-(up|down)_lectype$", names(degs), value = TRUE)
+go_comps  <- grep("^so_(8|merge)-up_lectype$", names(degs), value = TRUE)
 plt_comps <- grep("^so_(8|merge)-up_lectype$", names(degs), value = TRUE)
 
 # Get GO terms
@@ -1383,7 +1377,7 @@ other_examples <- plot_grid(
   other_examples, NULL,
   labels     = c("G", ""),
   label_size = ttl_pt2 * 1.5,
-  rel_widths = c(0.7, 1),
+  rel_widths = c(0.9, 1),
   nrow       = 1
 )
 
