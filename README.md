@@ -1,4 +1,5 @@
-## Morrison LNSC
+## Chikungunya virus infection disrupts lymph node lymphatic endothelial cell composition and function via MARCO
 
-Integrated analysis of CHIKV LNSC scRNA-seq datasets
+Cormac J. Lucas, Ryan M. Sheridan, Glennys V. Reynoso, Bennett J. Davenport, Mary K. McCarthy, Aspen Martin, Jay R. Hesselberth, Heather D. Hickman, Beth A. J. Tamburini, Thomas E. Morrison
 
+Infection with chikungunya virus (CHIKV) causes disruption of draining lymph node (dLN) organization, including paracortical relocalization of B cells, loss of the B cell-T cell border, and lymphocyte depletion that is associated with infiltration of the LN with inflammatory myeloid cells. Here, we find that during the first 24 h of infection, CHIKV RNA accumulates in MARCO-expressing lymphatic endothelial cells (LECs) in both the floor and medullary LN sinuses. The accumulation of viral RNA in the LN was associated with a switch to an antiviral and inflammatory gene expression program across LN stromal cells, and this inflammatory response, including recruitment of myeloid cells to the LN, was accelerated by CHIKV-MARCO interactions. As CHIKV infection progressed, both floor and medullary LECs diminished in number, suggesting that these cells may be functionally impaired. Consistent with this idea, we find that antigen acquisition by LECs, a key function of LN LECs during infection and immunization, was reduced during pathogenic CHIKV infection.
